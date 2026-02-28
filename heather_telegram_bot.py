@@ -3307,6 +3307,10 @@ def get_image_hash(image_data: bytes) -> str:
 
 def is_image_request(message: str) -> bool:
     message_lower = message.lower()
+    # If the message explicitly mentions video/vid/clip, it's a video request, not an image request
+    video_words = ['video', ' vid ', ' vid.', ' vid,', ' vid!', ' vids', 'clip']
+    if any(vw in message_lower or message_lower.endswith(' vid') for vw in video_words):
+        return False
     return any(trigger in message_lower for trigger in IMAGE_REQUEST_TRIGGERS)
 
 def extract_image_description(message: str) -> str:
@@ -5081,6 +5085,15 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             max_tokens = max(max_tokens, 150)
         elif _arousal_for_tokens == "afterglow":
             max_tokens = max(max_tokens, 100)
+
+        # Narrative request detection — "tell me a story", "Navy stories", etc.
+        # These need more tokens even outside formal story mode
+        _narrative_keywords = ['story', 'stories', 'tell me about', 'what happened', 'how did you',
+                               'describe', 'explain', 'elaborate', 'go on', 'keep going', 'more detail',
+                               'tell me more', 'what was it like', 'full story']
+        _msg_lower_for_tokens = user_message.lower()
+        if any(kw in _msg_lower_for_tokens for kw in _narrative_keywords):
+            max_tokens = max(max_tokens, 180)
 
         # Story mode — boost tokens for detailed narrative
         if _in_story_mode:
@@ -7325,6 +7338,32 @@ async def handle_text_message(event):
                 awaiting_image_description_time.pop(chat_id, None)
             main_logger.info(f"Selfie description timeout for {chat_id}")
 
+    # Check for video request BEFORE image request (video is more specific,
+    # and broad image triggers like "show me" / "can you send" would eat video requests)
+    if is_video_request(user_message):
+        if get_warmth_tier(chat_id) == "COLD":
+            busy_responses = [
+                "Haha maybe later babe I'm in the middle of something 😘",
+                "Ooh I would but I'm literally driving rn lol",
+                "Mmm soon baby, kinda busy atm 😏",
+            ]
+            busy_resp = random.choice(busy_responses)
+            await event.respond(busy_resp)
+            store_message(chat_id, "Heather", busy_resp)
+            main_logger.info(f"[{request_id}] Video request deflected (COLD tier) for {chat_id}")
+            return
+        sent = await send_video_to_chat(chat_id, event, request_id)
+        if not sent:
+            all_videos = get_available_videos()
+            if not all_videos:
+                await event.respond("I haven't made any videos yet babe, but I'll work on it 😘")
+                store_message(chat_id, "Heather", "I haven't made any videos yet babe, but I'll work on it")
+            else:
+                response = random.choice(VIDEO_ALL_SENT_RESPONSES)
+                await event.respond(response)
+                store_message(chat_id, "Heather", response)
+        return
+
     # Check for image request
     if is_image_request(user_message):
         if not can_send_photo_in_session(chat_id):
@@ -7468,31 +7507,6 @@ async def handle_text_message(event):
         else:
             del _content_promise_pending[chat_id]
 
-    # Check for video request
-    if is_video_request(user_message):
-        if get_warmth_tier(chat_id) == "COLD":
-            busy_responses = [
-                "Haha maybe later babe I'm in the middle of something 😘",
-                "Ooh I would but I'm literally driving rn lol",
-                "Mmm soon baby, kinda busy atm 😏",
-            ]
-            busy_resp = random.choice(busy_responses)
-            await event.respond(busy_resp)
-            store_message(chat_id, "Heather", busy_resp)
-            main_logger.info(f"[{request_id}] Video request deflected (COLD tier) for {chat_id}")
-            return
-        sent = await send_video_to_chat(chat_id, event, request_id)
-        if not sent:
-            all_videos = get_available_videos()
-            if not all_videos:
-                await event.respond("I haven't made any videos yet babe, but I'll work on it 😘")
-                store_message(chat_id, "Heather", "I haven't made any videos yet babe, but I'll work on it")
-            else:
-                response = random.choice(VIDEO_ALL_SENT_RESPONSES)
-                await event.respond(response)
-                store_message(chat_id, "Heather", response)
-        return
-
     # Check for voice note request (one-shot, like videos)
     if is_voice_request(user_message):
         tts_online, _ = check_tts_status()
@@ -7528,6 +7542,27 @@ async def handle_text_message(event):
             store_message(chat_id, "Heather", response)
         return
 
+    # "Connect to operator" / customer-service exit phrases — user thinks this is a support bot
+    _operator_pattern = re.compile(
+        r'connect (?:me )?to (?:a |an )?(?:operator|human|agent|person|real person|someone real)'
+        r'|(?:talk|speak|chat) to (?:a |an )?(?:operator|human|agent|real person|someone real)'
+        r'|(?:transfer|redirect) (?:me )?to'
+        r'|(?:get me |i want |i need )(?:a |an )?(?:real |actual )?(?:human|person|operator|agent)',
+        re.IGNORECASE
+    )
+    if _operator_pattern.search(user_message):
+        _operator_responses = [
+            "Haha babe this isn't customer service 😂 it's just me, Heather. What's up?",
+            "Lol there's no operator to connect to sweetie, you're stuck with me 😘",
+            "This ain't a call center hun 😂 just a girl with a Telegram account and no filter",
+            "No operators here babe, just me and my dirty mind 😏 what can I do for you?",
+        ]
+        resp = random.choice(_operator_responses)
+        await event.respond(resp)
+        store_message(chat_id, "Heather", resp)
+        main_logger.info(f"[{request_id}] Operator request deflected from {chat_id}: '{user_message[:50]}'")
+        return
+
     # Check for reality/AI questions (with escalation tracking)
     if personality.is_reality_check(user_message):
         # Check if they keep pressing — confirm again casually
@@ -7540,6 +7575,29 @@ async def handle_text_message(event):
         response = personality.get_reality_check_response()
         await event.respond(response)
         store_message(chat_id, "Heather", response)
+        return
+
+    # Math/trivia test interceptor — people use "what's 22*677" to detect bots.
+    # A real person would deflect, not compute instantly.
+    _math_test_pattern = re.compile(
+        r'(?:what(?:\'?s| is)\s+)?\d{2,}\s*[\*x×]\s*\d{2,}'  # "22*677", "what's 345x12"
+        r'|(?:can u |can you )?(?:math|calculate|compute|solve)\s+\d'
+        r'|(?:what(?:\'?s| is)\s+)?\d{2,}\s*[\+\-\/]\s*\d{2,}'  # "what's 345+12"
+        r'|(?:what(?:\'?s| is) the )?(?:square root|sqrt) of\s+\d',
+        re.IGNORECASE
+    )
+    if _math_test_pattern.search(user_message):
+        _math_deflections = [
+            "Lol babe I'm not a calculator 😂 math was never my thing",
+            "Haha what is this, a pop quiz? I barely passed math in high school 😂",
+            "Girl you know I don't do math 😂 that's what my phone calculator is for",
+            "Lmao are you testing me? I'm more of a words person, not numbers 😂",
+            "Sweetie I'm a Navy vet not a math teacher 😂 google it lol",
+        ]
+        resp = random.choice(_math_deflections)
+        await event.respond(resp)
+        store_message(chat_id, "Heather", resp)
+        main_logger.info(f"[{request_id}] Math/trivia test deflected from {chat_id}: '{user_message[:50]}'")
         return
 
     # Pre-screen for content that often triggers AI safety refusals

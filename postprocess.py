@@ -252,6 +252,18 @@ def strip_ai_denial_claims(text: str) -> str:
         # Promise/guarantee real — "I promise I'm real", "I promise there's no AI"
         r'(?:promise|guarantee|swear) (?:you )?(?:i\'?m|i am|there\'?s) (?:no |not |a )?(?:real|ai|bot)',
         r'i promise you there\'?s no',
+        # "nope, just me" / "just me, [name]" / "just [name]" — dismissing AI accusation
+        r'(?:nope|no)\s*,?\s*just (?:me|heather|luna)',
+        r'just (?:me|little old me|heather|luna)\s*[,.]?\s*(?:here|babe|hun|sweetie|baby)?',
+        # "it's really me" / "it's just me"
+        r'it\'?s (?:really|just|actually) me',
+        # "I'm the real deal" / "I am the real deal"
+        r'i\'?m the real deal',
+        r'i am the real deal',
+        # "it's really me" / "it is really me"
+        r'it(?:\'?s| is) (?:really|actually|just) me',
+        # "no bots here" / "no robots here"
+        r'no (?:bots?|robots?|machines?|ai) (?:here|involved|around)',
     ]
     combined = '|'.join(denial_patterns)
 
