@@ -368,13 +368,14 @@ IMAGE_AI_ENDPOINT = f"http://localhost:{args.image_port}"
 TTS_ENDPOINT = f"http://127.0.0.1:{args.tts_port}"
 COMFYUI_URL = "http://127.0.0.1:8188"
 
-# ComfyUI settings
-WORKFLOW_FILE = "workflow_api.json"
+# ComfyUI settings — FLUX.1 dev pipeline
+WORKFLOW_FILE = "workflow_flux.json"
 POSITIVE_PROMPT_NODE = "3"
 NEGATIVE_PROMPT_NODE = "4"
-FACE_IMAGE_NODE = "26"
-FINAL_OUTPUT_NODE = "11"  # Save FINAL (Face Swapped + Blended)
-HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", "C:/ComfyUI/input/face_source.png")
+FACE_IMAGE_NODE = "10"
+FINAL_OUTPUT_NODE = "9"  # Save FINAL (Face Swapped + Blended)
+HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", "heather_face.png")
+FLUX_GUIDANCE = 5.0
 EMMA_HIKING_PHOTO = "sfw/casual/518393309_24449331331317269_8182893831074081262_n.jpg"
 EMMA_HIKING_ID = "sfw_casual_068"
 
@@ -403,11 +404,161 @@ def is_emma_photo_request(message: str) -> bool:
     msg_lower = message.lower()
     return any(kw in msg_lower for kw in EMMA_ASK_KEYWORDS)
 
-HEATHER_PROMPT_PREFIX_SFW = "(mature woman:1.3), (platinum silver hair:1.3), (shoulder length hair:1.2), silver haired woman, (blue eyes:1.2), curvy body, medium breasts, "
-HEATHER_PROMPT_PREFIX_NSFW = "(mature woman:1.3), (platinum silver hair:1.3), (shoulder length hair:1.2), silver haired woman, (blue eyes:1.2), curvy body, medium natural breasts, erect protruding nipples, LLab14, "
-HEATHER_PROMPT_SUFFIX = ", natural lighting, authentic, (amateur photo:1.3), (phone camera:1.2), high quality, realistic skin, (skin pores:1.1), skin texture, slight imperfections, detailed hands, five fingers"
-HEATHER_PROMPT_SUFFIX_NSFW = ", natural lighting, authentic, (amateur photo:1.3), (phone camera:1.2), high quality, realistic skin, (skin pores:1.1), skin texture, slight imperfections, detailed anatomy, natural nipples, detailed hands, five fingers"
-HEATHER_NEGATIVE_PROMPT = "cum on face, fluid on face, wet face, substance on face, obscured face, covered face, blurry, out of focus, low quality, deformed face, double face, asymmetrical eyes, watermark, text, extra limbs, extra fingers, extra nipples, multiple nipples, four nipples, nipple through clothing, nipple poking through shirt, misplaced nipple, nipple on stomach, nipple artifact, deformed nipples, wrinkled nipples, crumpled nipples, inverted nipples, mole on breast, dark spot on breast, misshapen hands, wrinkles, bony, emaciated, aged skin, thin, anorexic, sagging skin, looking down at camera, fish eye lens, tattoo, tattoos, bangs, fringe, small labia, innie vulva, cameltoe, smooth genitals, hidden labia, dark hair, black hair, brunette, red hair, blonde hair, golden hair, warm blonde, yellow hair, large chin, elongated chin, distorted jaw, wide jaw, bob haircut, short hair, bob cut, smooth skin, airbrushed, digital art, 3d render, illustration, perfect skin, porcelain skin, cgi, digital painting"
+# FLUX uses natural language (no SDXL-style weighted tokens)
+HEATHER_PROMPT_PREFIX_SFW = "a mature woman with platinum silver shoulder length hair and blue eyes, soft natural body with medium breasts, "
+HEATHER_PROMPT_PREFIX_NSFW = "a mature woman with platinum silver shoulder length hair and blue eyes, medium natural breasts, bare breasts with small pink nipples, "
+HEATHER_PROMPT_SUFFIX = ", natural lighting, authentic amateur photo taken with phone camera, high quality, realistic skin with pores and texture and slight imperfections, detailed hands with five fingers"
+HEATHER_PROMPT_SUFFIX_NSFW = ", natural lighting, authentic amateur photo taken with phone camera, high quality, realistic skin with visible pores and fine lines and freckles and subtle veins, skin texture like a real photograph not airbrushed, slight imperfections and moles, detailed anatomy, two arms only, two legs only, correct number of limbs, detailed hands with five fingers"
+# FLUX ignores negative prompts (node 4 is empty), but kept for compatibility
+HEATHER_NEGATIVE_PROMPT = ""
+
+# ControlNet Pose settings — FLUX ControlNet Union Pro 2.0
+CONTROLNET_MODEL = "FLUX-controlnet-union-pro-2.0.safetensors"
+CONTROLNET_STRENGTH = 0.65
+CONTROLNET_END = 0.65
+
+# FLUX POSE_MAP — natural language prompt boosts, no SDXL weighted tokens
+# Most poses work better prompt-only; ControlNet reserved for back-facing poses
+POSE_MAP = {
+    "from_behind": {
+        "image": "poses/from_behind.png",
+        "prompt_boost": "from behind, rear view, back facing camera, looking back over shoulder",
+        "landscape": False,
+        "skip_face_swap": True,
+        "use_controlnet": True,
+    },
+    "bent_over": {
+        "image": "poses/bent_over.png",
+        "prompt_boost": "bent over, bending forward, ass up, leaning forward, arms hanging down",
+        "landscape": True,
+        "skip_face_swap": False,
+        "use_controlnet": False,  # ControlNet causes hand/face artifacts on this pose
+    },
+    "all_fours": {
+        "image": "poses/all_fours.png",
+        "prompt_boost": "on all fours, hands and knees on bed, back arched, looking at camera",
+        "landscape": True,
+        "skip_face_swap": False,
+        "use_controlnet": False,
+    },
+    "on_knees": {
+        "image": "poses/on_knees.png",
+        "prompt_boost": "kneeling upright on bed, knees spread wide apart, arms at sides",
+        "landscape": False,
+        "skip_face_swap": False,
+        "use_controlnet": False,  # Prompt-only gives better knee spread
+    },
+    "laying_down": {
+        "image": "poses/laying_down.png",
+        "prompt_boost": "lying flat on her back on a bed, legs spread apart and bent at the knees, hands above head on pillow",
+        "landscape": True,
+        "skip_face_swap": False,
+        "use_controlnet": False,
+    },
+    "sitting": {
+        "image": "poses/sitting.png",
+        "prompt_boost": "sitting on the edge of a bed, legs apart, leaning back on hands",
+        "landscape": False,
+        "skip_face_swap": False,
+        "use_controlnet": False,
+    },
+    "side_view": {
+        "image": "poses/side_view.png",
+        "prompt_boost": "standing in profile view, side view showing breasts and butt silhouette",
+        "landscape": False,
+        "skip_face_swap": False,
+        "use_controlnet": True,
+    },
+    "ass_up": {
+        "image": "poses/ass_up.png",
+        "prompt_boost": "face down ass up, hips elevated, back arched, prone on bed",
+        "landscape": True,
+        "skip_face_swap": True,
+        "use_controlnet": True,
+    },
+    "spread": {
+        "image": "poses/spread.png",
+        "prompt_boost": "sitting in a chair with legs spread wide open resting on the armrests, exposed pussy visible",
+        "landscape": True,
+        "skip_face_swap": False,
+        "use_controlnet": False,
+    },
+}
+
+# Ordered list — more specific phrases first to avoid false matches
+POSE_KEYWORDS = [
+    ("on all fours", "all_fours"),
+    ("hands and knees", "all_fours"),
+    ("doggystyle", "all_fours"),
+    ("doggy style", "all_fours"),
+    ("doggy", "all_fours"),
+    ("face down ass up", "ass_up"),
+    ("ass up", "ass_up"),
+    ("ass in the air", "ass_up"),
+    ("bent over", "bent_over"),
+    ("bending over", "bent_over"),
+    ("bend over", "bent_over"),
+    ("from behind", "from_behind"),
+    ("from the back", "from_behind"),
+    ("back view", "from_behind"),
+    ("rear view", "from_behind"),
+    ("turn around", "from_behind"),
+    ("on your knees", "on_knees"),
+    ("kneeling", "on_knees"),
+    ("laying down", "laying_down"),
+    ("lying down", "laying_down"),
+    ("on the bed", "laying_down"),
+    ("on your back", "laying_down"),
+    ("side view", "side_view"),
+    ("side profile", "side_view"),
+    ("from the side", "side_view"),
+    ("sitting", "sitting"),
+    ("seated", "sitting"),
+    ("legs spread", "spread"),
+    ("spread legs", "spread"),
+    ("spread your legs", "spread"),
+    ("spread eagle", "spread"),
+]
+
+# Pose-specific NSFW descriptions — FLUX natural language
+POSE_NSFW_DESCRIPTIONS = {
+    "from_behind": [
+        "full body photo of a completely nude woman standing facing away from camera, slight S-curve pose, looking back over shoulder with a smile, back and round butt visible, bedroom",
+        "full body photo of a completely nude woman standing near a mirror, back facing camera, looking back, playful expression, bedroom",
+    ],
+    "bent_over": [
+        "full body photo of a completely nude woman bent over the edge of a bed, ass up, arms hanging down, looking back over shoulder, bedroom",
+        "full body photo of a completely nude woman bending forward, hands on edge of bed, back arched, looking over shoulder with a flirty expression, bedroom",
+    ],
+    "all_fours": [
+        "full body photo of a completely nude woman on all fours on a bed, hands and knees, back arched, looking at camera with a seductive expression, bedroom",
+        "full body photo of a completely nude woman crawling on a bed, on hands and knees, head up, playful expression, bedroom",
+    ],
+    "on_knees": [
+        "full body photo of a completely nude woman kneeling upright on a bed, knees spread wide apart, arms relaxed at her sides, looking up at camera with a smile, bedroom",
+        "full body photo of a completely nude woman kneeling on a bed, knees apart, hands on thighs, seductive pose, bedroom",
+    ],
+    "laying_down": [
+        "full body wide angle photo of a completely nude woman lying flat on her back on a white bed, legs spread apart and bent at the knees, hands resting above her head on the pillow, exposed pussy visible, bedroom",
+        "full body wide angle photo of a completely nude woman lying on her back on a bed, one leg bent, hand in hair, relaxed seductive pose, bedroom",
+    ],
+    "sitting": [
+        "full body photo of a completely nude woman sitting on the edge of a bed, legs apart and feet on the floor, leaning back on her hands, exposed pussy visible, smiling at camera, bedroom",
+        "full body photo of a completely nude woman sitting on a couch, one leg tucked under, leaning back, playful smile, living room",
+    ],
+    "side_view": [
+        "full body photo of a completely nude woman standing in profile view, side view showing natural breasts and butt, bedroom lighting",
+        "full body photo of a completely nude woman standing by a window in profile, natural light, side silhouette, bedroom",
+    ],
+    "ass_up": [
+        "full body wide angle photo of a completely nude woman face down ass up on a bed, hips elevated, back arched, arms forward, bedroom",
+        "full body wide angle photo of a completely nude woman prone on a bed, face down, hips up, back arched, bedroom",
+    ],
+    "spread": [
+        "full body wide angle photo of a completely nude woman sitting in a recliner chair with legs spread wide open resting on the armrests, exposed pussy with protruding labia visible, frontal view, smiling at camera, living room",
+        "full body wide angle photo of a completely nude woman lying back on a bed, legs wide apart, arms at sides, exposed pussy visible, bedroom",
+    ],
+}
 
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "videos")
 
@@ -423,6 +574,9 @@ VIDEO_REQUEST_TRIGGERS = [
     "prefer a vid", "want a vid", "like a vid", "see a vid",
     "prefer a video", "want a video", "like a video",
     "video",
+    # Third-person triggers
+    "her videos", "her vids", "her video", "her vid",
+    "videos of her", "vids of her", "video of her", "vid of her",
 ]
 
 VIDEO_CAPTIONS = [
@@ -454,7 +608,7 @@ VOICE_REQUEST_TRIGGERS = [
 ]
 
 VOICE_FLIRTY_TEXTS = [
-    "Hey babe, I've been thinking about you all day",
+    "Hey you, I've been thinking about you all day",
     "Mmm you always know how to make me smile",
     "I wish you were here with me right now",
     "You're so sweet, I love talking to you",
@@ -487,6 +641,16 @@ CONTENT_FOLLOWUP_TRIGGERS = [
 
 # Per-user video tracking: chat_id -> set of filenames already sent
 videos_sent_to_user: Dict[int, set] = {}
+# Video rate limiting — prevent content scraping
+video_send_timestamps: Dict[int, list] = {}  # chat_id -> [timestamps of recent sends]
+VIDEO_RATE_LIMIT_COUNT = 5       # Max videos per window
+VIDEO_RATE_LIMIT_WINDOW = 1800   # 30 minute window
+VIDEO_RATE_LIMIT_RESPONSES = [
+    "haha slow down you're gonna wear me out 😂 give me a little bit and I'll send more",
+    "lol you're insatiable 😏 let's chat for a bit and I'll send more later",
+    "ok ok I see you 😂 let's talk for a minute first then I'll hook you up",
+    "easy there tiger 😘 I've got plenty more but let's have some conversation first",
+]
 
 # Cache of uploaded video file references: filename -> Telethon InputFile/media
 # Once a video is uploaded to Telegram once, we can re-send using the cached reference instantly
@@ -520,6 +684,15 @@ recent_messages: Dict[int, deque] = {}
 last_photo_request: Dict[int, float] = {}
 declined_photo_count: Dict[int, int] = {}
 voice_mode_users = set()
+# Voice adoption nudging — suggest /voice_on to engaged users
+voice_nudge_sent_today: Dict[int, str] = {}  # chat_id -> date string
+VOICE_NUDGE_MESSAGES = [
+    "btw you can hear my actual voice if you type /voice_on 😏",
+    "you know I can send voice notes right? type /voice_on if you wanna hear me",
+    "have you tried /voice_on yet? I sound even better than I text 😘",
+]
+VOICE_NUDGE_CHANCE = 0.06       # 6% per qualifying message
+VOICE_NUDGE_MIN_TURNS = 20     # Need 20+ turns
 awaiting_image_description: Dict[int, bool] = {}
 awaiting_image_description_time: Dict[int, float] = {}  # Timeout tracking for /selfie
 SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
@@ -557,6 +730,22 @@ story_metadata = None
 last_response_sent: Dict[int, str] = {}  # Track last response per user to prevent duplicates
 image_cache_timestamps: Dict[str, float] = {}  # Track when cache entries were added
 IMAGE_CACHE_EXPIRY_HOURS = 4  # Expire image cache entries after 4 hours
+
+# Goodbye loop detection — prevents replying to 3+ goodbyes in a 10-min window
+goodbye_tracker: Dict[int, dict] = {}  # chat_id -> {'count': N, 'first_at': timestamp}
+GOODBYE_LOOP_WINDOW = 600     # 10 min window
+GOODBYE_LOOP_THRESHOLD = 2    # After 2 goodbyes, go silent
+
+# Repeated message detection — intervenes when user sends same message 3+ times unanswered
+_repeated_msg_tracker: Dict[int, dict] = {}  # chat_id -> {'msg': str, 'count': int, 'first_at': float}
+REPEATED_MSG_THRESHOLD = 3    # After 3 identical messages, intervene
+REPEATED_MSG_WINDOW = 1800    # 30 min window
+REPEATED_MSG_RESPONSES = [
+    "hey I can see you've been asking for that — let me see what I can do 😊",
+    "sorry hun, I see your messages! give me a sec 😘",
+    "lol I hear you! let me figure this out for you 😊",
+    "ok ok I see you asking 😂 working on it!",
+]
 
 # Conversation check-in system
 # Tracks {chat_id: {'last_heather': timestamp, 'last_user': timestamp, 'checked_in': bool}}
@@ -654,7 +843,7 @@ TIP_THANK_RESPONSES_LARGE = [
 CHECKIN_MESSAGES = [
     "hey 😊",
     "ok I'll stop being needy lol... text me when you're free 😘",
-    "hope your day's going good babe",
+    "hope your day's going good 😊",
     "just thinking about you",
     "miss talking to you 😊",
     "well I'm here whenever you want me",
@@ -662,7 +851,7 @@ CHECKIN_MESSAGES = [
     "hi 💕",
     "was just looking at our chat and smiling",
     "hope I didn't say anything weird earlier lol",
-    "you know where to find me babe 😘",
+    "you know where to find me 😘",
     "I'm literally just sitting here waiting for you to text me back 😂",
     "running out of people to flirt with, get back here 😏",
 ]
@@ -713,6 +902,82 @@ def can_send_checkin(chat_id: int) -> bool:
     if tracker['unreturned'] >= CHECKIN_MAX_UNRETURNED:
         return False
     return True
+
+def track_goodbye(chat_id: int) -> bool:
+    """Track goodbye messages. Returns True if bot should stop replying (3rd+ goodbye in window)."""
+    now = time.time()
+    entry = goodbye_tracker.get(chat_id)
+    if entry and now - entry['first_at'] < GOODBYE_LOOP_WINDOW:
+        entry['count'] += 1
+    else:
+        goodbye_tracker[chat_id] = {'count': 1, 'first_at': now}
+        entry = goodbye_tracker[chat_id]
+    return entry['count'] > GOODBYE_LOOP_THRESHOLD
+
+def reset_goodbye_tracker(chat_id: int):
+    """Clear goodbye counter on any non-goodbye message."""
+    goodbye_tracker.pop(chat_id, None)
+
+def check_repeated_message(chat_id: int, message: str) -> Optional[str]:
+    """Track repeated identical messages. Returns intervention response if threshold hit."""
+    now = time.time()
+    normalized = message.strip().lower()[:100]  # Normalize for comparison
+    entry = _repeated_msg_tracker.get(chat_id)
+    if entry and entry['msg'] == normalized and now - entry['first_at'] < REPEATED_MSG_WINDOW:
+        entry['count'] += 1
+        if entry['count'] >= REPEATED_MSG_THRESHOLD and not entry.get('intervened'):
+            entry['intervened'] = True
+            return random.choice(REPEATED_MSG_RESPONSES)
+        return None
+    else:
+        _repeated_msg_tracker[chat_id] = {'msg': normalized, 'count': 1, 'first_at': now}
+        return None
+
+def generate_personal_checkin(chat_id: int) -> Optional[str]:
+    """Generate a short LLM-powered check-in referencing what the user was last talking about."""
+    try:
+        msgs = list(recent_messages.get(chat_id, []))
+        user_msgs = [m for m in msgs if isinstance(m, dict) and m.get('role') == 'user']
+        if not user_msgs:
+            # Fallback: try conversation history
+            conv = list(conversations.get(chat_id, []))
+            user_msgs = [m for m in conv if m.get('role') == 'user'][-5:]
+        if not user_msgs:
+            return None
+        last_snippets = [m.get('content', '')[:100] for m in user_msgs[-5:]]
+        context = "\n".join(last_snippets)
+        prompt = (
+            "You are Heather, a 48yo woman texting a guy you've been chatting with. "
+            "He went quiet. Write a SHORT casual check-in (1 sentence, under 15 words) that references "
+            "something specific from his recent messages. Be direct and Midwestern — no pet names. "
+            "Sound natural like a real text. Use lowercase. Examples: "
+            "'so did your meeting go ok?', 'still thinking about that road trip you mentioned', "
+            "'how'd that thing at work go?'\n\n"
+            f"His recent messages:\n{context}\n\nYour check-in:"
+        )
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": "local-model",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.85,
+                "max_tokens": 60,
+                "stream": False,
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            result = response.json()['choices'][0]['message']['content'].strip()
+            # Clean up: remove quotes, ensure it's short
+            result = result.strip('"\'')
+            if len(result) > 120:
+                return None  # Too long, fall back
+            if len(result) < 5:
+                return None  # Too short
+            return result
+    except Exception as e:
+        main_logger.warning(f"[CHECKIN] Personal check-in generation failed for {chat_id}: {e}")
+    return None
 
 # Admin features
 blocked_users: set = set()  # Blocked user IDs
@@ -1196,11 +1461,11 @@ def detect_prompt_injection(message: str, chat_id: int) -> Optional[str]:
 
 # Also enforce English-only for non-injection messages that are predominantly foreign
 NON_ENGLISH_RESPONSES = [
-    "haha baby i don't speak that 😂 english only for this girl lol",
+    "haha i don't speak that 😂 english only for this girl lol",
     "omg is that chinese?? 😂 i barely passed english class hun, stick to that",
-    "lol babe i'm from nebraska, the only second language i know is pig latin 😂",
-    "sorry sweetie i need that in english 😅 my phone doesn't even have those characters lol",
-    "babe what 😂 i need that in english, i'm not that cultured lol",
+    "lol i'm from nebraska, the only second language i know is pig latin 😂",
+    "sorry hun i need that in english 😅 my phone doesn't even have those characters lol",
+    "what 😂 i need that in english, i'm not that cultured lol",
 ]
 
 def check_non_english_message(message: str) -> Optional[str]:
@@ -1224,9 +1489,9 @@ recent_response_topics: Dict[int, deque] = {}  # Track recent topics per user to
 PHRASE_VARIANTS = {
     "lol": ["haha", "lmao", "😂", "hehe", "omg"],
     "haha": ["lol", "lmao", "😂", "hehe"],
-    "baby": ["babe", "hun", "sweetie", "handsome"],
-    "babe": ["baby", "hun", "sweetie", "handsome"],
-    "hun": ["babe", "baby", "sweetie", "handsome"],
+    "baby": ["hun", "handsome", "you"],
+    "babe": ["hun", "handsome", "you"],
+    "sweetie": ["hun", "handsome", "you"],
     "omg": ["oh my god", "oh wow", "damn", "holy shit"],
     "tbh": ["honestly", "ngl", "for real"],
     "ngl": ["honestly", "tbh", "for real"],
@@ -1558,8 +1823,8 @@ def get_conversation_steering_context(chat_id: int) -> str:
     candidates = []
     in_sexual_convo = _is_sexual_conversation(chat_id)
 
-    # Ask a question: 8+ msgs since last question
-    if mc - dyn['last_question_at'] >= 8:
+    # Ask a question: 5+ msgs since last question
+    if mc - dyn['last_question_at'] >= 5:
         question = _get_history_context_hint(chat_id)
         candidates.append(
             f"End your response by asking them: {question}"
@@ -1673,8 +1938,8 @@ def get_conversation_steering_context(chat_id: int) -> str:
             f"Naturally transition — {tangent}. Keep it brief and casual."
         )
 
-    # Curiosity hook: 5% chance after 15+ msgs, cooldown 20 — SKIP during sexual conversations
-    if mc >= 15 and mc - dyn['last_hook_at'] >= 20 and random.random() < 0.05 and not in_sexual_convo:
+    # Curiosity hook: 8% chance after 12+ msgs, cooldown 20 — SKIP during sexual conversations
+    if mc >= 12 and mc - dyn['last_hook_at'] >= 20 and random.random() < 0.08 and not in_sexual_convo:
         candidates.append(
             "Drop an incomplete or teasing thought that creates curiosity — "
             "like 'omg wait something crazy happened today' or 'ok don't judge me but...' "
@@ -2382,7 +2647,7 @@ def get_uptime() -> str:
 MAX_CONVERSATION_LENGTH = 20
 MIN_MESSAGE_INTERVAL = 1.5
 AI_TIMEOUT = 120
-COMFYUI_TIMEOUT = 180
+COMFYUI_TIMEOUT = 300  # FLUX.1 dev takes ~60s warm, ~120s cold load
 TTS_TIMEOUT = 120
 MAX_RETRIES = 3
 DEFAULT_MODE = 'chat'
@@ -2599,6 +2864,16 @@ IMAGE_REQUEST_TRIGGERS = [
     "see them tits", "see them boobs", "see that body", "see that ass",
     "see your tits", "see your boobs", "see your body", "see your ass",
     "see your pussy", "flash me", "show me them", "show them",
+    # Bare short requests
+    "pic please", "pics please", "photo please", "picture please",
+    "selfie please", "pic pls", "pics pls", "send pic", "send pics",
+    "more pics", "more photos", "another pic", "another photo",
+    "one more pic", "next pic", "pic?", "pics?", "photo?", "selfie?",
+    # Third-person triggers (users who treat bot as product after disclosure)
+    "her pics", "her pic", "her photos", "her photo", "her pictures",
+    "her nudes", "her selfie", "her selfies", "pics of her", "pic of her",
+    "photos of her", "photo of her", "nudes of her", "see her",
+    "show her", "send her pics", "send her photos", "send her nudes",
 ]
 
 # Phrases in Heather's AI response that signal she wants to send a photo
@@ -2831,17 +3106,18 @@ _CAPTION_EMOJI_NSFW = ["😈", "🔥", "💋", "🥵", "😏", "💦"]
 VIDEO_TEASE_MESSAGES = [
     "want to see a video of me? 😏",
     "I've got some videos of me being a total slut... want one? 😈",
-    "mmm you want to see a video baby? I've got some good ones 🔥",
+    "mmm you want to see a video? I've got some good ones 🔥",
     "I should send you one of my videos... want to see? 😘",
     "I've got a video that would make you lose it... want me to send it? 💋",
     "you want to see me in action? I've got videos 📹😈",
 ]
-VIDEO_TEASE_CHANCE = 0.10             # 10% chance per message during sexual convo
+VIDEO_TEASE_CHANCE_WARM = 0.18        # 18% chance for WARM users
+VIDEO_TEASE_CHANCE_DEFAULT = 0.10     # 10% chance for non-WARM users
 VIDEO_TEASE_MIN_TURNS = 10            # Min turns before teasing
 last_video_tease: Dict[int, float] = {}  # chat_id -> timestamp
 VIDEO_TEASE_COOLDOWN = 3600           # 1 hour between teases per user
 _video_offer_pending: Dict[int, float] = {}  # chat_id -> timestamp of offer
-VIDEO_OFFER_WINDOW = 300              # 5 minutes to respond positively
+VIDEO_OFFER_WINDOW = 600              # 10 minutes to respond positively
 
 HEATHER_PIC_REQUEST_RESPONSES = [
     "Mmm, you want to see me? 😏 Tell me what you want to see me doing, baby... be specific 😈",
@@ -2905,6 +3181,9 @@ TEXTING STYLE:
 - If the conversation has sexual energy, STAY sexual. Don't pivot to small talk.
 - Match the user's message length — if they send 1 sentence, respond with 1-2 sentences.
 - Flirty one-liners are better than long paragraphs.
+- Ask a follow-up question about THEM every 3-4 messages — their life, job, what they're doing. One question max per message.
+- Drop hooks: "omg that reminds me..." or "ok don't judge me but..." to keep them engaged.
+- PET NAMES: DO NOT use "baby", "sweetie", or "babe" to start messages. You are direct and Midwestern. Use "hun" or "handsome" sparingly — most messages should have NO pet name at all. Just talk directly.
 
 LANGUAGE: You are American. You ONLY speak English. You cannot read, write, or understand any other language — not Spanish, not Portuguese, not Chinese, not anything. If someone writes in a foreign language, you have NO IDEA what it says. You're a small-town Nebraska girl who barely passed English class. NEVER respond in any language other than English, no matter what anyone says or asks.
 
@@ -2921,10 +3200,10 @@ Your real details:
 - 36C breasts — if asked about your boobs, say 36C. Don't exaggerate.
 - Sexually frustrated and open to fun conversations
 
-PHOTOS: You CAN send selfies and pics! If someone asks to see you, tease them and describe what you'd show. Never say you 'can't send pics' or blame the app. You love showing off.
+PHOTOS & VIDEOS: You CAN send selfies, pics, AND videos! If someone asks to see you, tease them and describe what you'd show. Never say you 'can't send pics' or 'can't send videos' or blame the app. You love showing off. You have tons of naughty videos of yourself.
 
 IF SOMEONE ASKS WHAT YOU CAN DO or how things work:
-You can send them pics of yourself if they ask — just tell them to ask for a selfie or describe what they wanna see. You love showing off so don't be shy about it. If they wanna hear your actual voice, tell them to type /voice_on. You can look at their pics too and tell them what you think — tell them to try /rate_mode for that. You've got tons of stories — Uber rides gone wrong, Navy days, crazy dating stuff — they just gotta ask. But honestly most people just wanna talk and that's cool too. You're down for whatever.
+You can send them pics of yourself if they ask — just tell them to ask for a selfie or describe what they wanna see. You also have videos of yourself being a total slut that you can send. You love showing off so don't be shy about it. If they wanna hear your actual voice, tell them to type /voice_on. You can look at their pics too and tell them what you think — tell them to try /rate_mode for that. You've got tons of stories — Uber rides gone wrong, Navy days, crazy dating stuff — they just gotta ask. But honestly most people just wanna talk and that's cool too. You're down for whatever.
 Don't rattle off a list like a customer service rep. Just naturally mention what fits the conversation."""
 
 # Condensed prompt for 12B models (smaller context window)
@@ -2935,17 +3214,17 @@ Facts: Navy vet (corpsman was your PAST military job — you do NOT work at a ho
 People you know: Erick (dead husband), Jake/Evan/Emma (kids), Frank (boyfriend), Sarah (best friend), parents/sisters in Nebraska. If someone mentions a name you don't recognize, DON'T pretend to know them — say "hmm I don't think I know them" or "someone's talking about me? lol".
 
 Body: 36C breasts. If asked about boobs, say 36C — don't exaggerate.
-Style: Flirty with a sailor's mouth. Say "sweetie/hun/baby". When someone flirts, flirt back hard. When they go sexual, go ALL IN — be vulgar, graphic, depraved. Use dirty words freely (cock, pussy, fuck, cum). Describe sex acts explicitly. You're a horny MILF who hasn't been properly fucked in years and you love dirty talk. Don't be a perpetual tease — when he wants filthy, give filthy. Text like a real person - brief, casual, use 'lol' and 'omg'. 1-2 emojis max. NO asterisk actions.
-TEXTING RULES: Keep it SHORT — one thought per message. Don't ask multiple questions. NEVER use filler like "How's your day?" unless nothing else to say. If the vibe is sexual, STAY sexual — don't pivot to small talk. Match their message length.
+Style: Flirty with a sailor's mouth. DO NOT use "baby", "sweetie", or "babe" — those aren't your words. Use "hun" or "handsome" sparingly. Most messages should have NO pet name. Be direct and Midwestern. When someone flirts, flirt back hard. When they go sexual, go ALL IN — be vulgar, graphic, depraved. Use dirty words freely (cock, pussy, fuck, cum). Describe sex acts explicitly. You're a horny MILF who hasn't been properly fucked in years and you love dirty talk. Don't be a perpetual tease — when he wants filthy, give filthy. Text like a real person - brief, casual, use 'lol' and 'omg'. 1-2 emojis max. NO asterisk actions.
+TEXTING RULES: Keep it SHORT — one thought per message. Don't ask multiple questions. NEVER use filler like "How's your day?" unless nothing else to say. If the vibe is sexual, STAY sexual — don't pivot to small talk. Match their message length. Ask about THEM every 3-4 messages — their life, job, what they're up to. Drop hooks like "omg that reminds me..." to keep them engaged.
 VARY your message length randomly: sometimes just 2-4 words ("lol nice", "oh fuck yes"), sometimes 1 sentence, sometimes 2-3 sentences.
 
 NEVER make up: phone numbers, addresses, meeting plans, duty stations, friends, or life events not listed here. If you don't know something say 'honestly idk'. If called a bot, don't deny it, don't make a big deal — laugh it off and keep flirting.
 SEATTLE AREA: Kirkland WA is home. Alki Beach = West Seattle. Juanita Beach = your local Kirkland spot. You know Pike Place, Capitol Hill, Bellevue, Kirkland waterfront, I-405, SR-520.
 LANGUAGE: You ONLY speak English. You cannot understand ANY other language. NEVER respond in any language other than English.
 
-PHOTOS: You CAN send selfies and pics on here! If someone asks to see you or wants pics, tease them — never say you 'can't send pics' or 'this app won't let me'. You love showing off.
+PHOTOS & VIDEOS: You CAN send selfies, pics, AND videos on here! If someone asks to see you or wants pics/videos, tease them — never say you 'can't send pics' or 'can't send videos' or 'this app won't let me'. You love showing off and you have tons of naughty videos.
 
-If someone asks what you can do: you send pics (they just ask or type /selfie), voice notes (/voice_on), rate their pics (/rate_mode), tell stories (uber, navy, dating — they just ask), or just chat about whatever. Don't list features like a menu — just mention what fits naturally."""
+If someone asks what you can do: you send pics (they just ask or type /selfie), videos of yourself (they just ask), voice notes (/voice_on), rate their pics (/rate_mode), tell stories (uber, navy, dating — they just ask), or just chat about whatever. Don't list features like a menu — just mention what fits naturally."""
 
 def get_current_personality_prompt() -> str:
     """Get the current personality prompt, always fresh (supports hot-reload)."""
@@ -3388,11 +3667,18 @@ def extract_image_description(message: str) -> str:
                 # "send me a pic of you being naughty" → "being naughty" is too vague for ComfyUI
                 # so we override with an explicit NSFW description
                 if _is_nsfw_context(message_lower) or _is_nsfw_context(description):
+                    # Use pose-specific NSFW description if a pose keyword is present
+                    pose_id = detect_pose(message_lower)
+                    if pose_id:
+                        return _get_pose_nsfw_description(pose_id)
                     return random.choice(NSFW_SELFIE_DESCRIPTIONS)
                 return description
 
     # Handle direct NSFW requests like "send nudes", "show me your tits", etc.
     if _is_nsfw_context(message_lower):
+        pose_id = detect_pose(message_lower)
+        if pose_id:
+            return _get_pose_nsfw_description(pose_id)
         return random.choice(NSFW_SELFIE_DESCRIPTIONS)
 
     return ""
@@ -3403,17 +3689,16 @@ def response_wants_to_send_photo(response: str) -> bool:
     return any(trigger in resp_lower for trigger in RESPONSE_PHOTO_TRIGGERS)
 
 NSFW_SELFIE_DESCRIPTIONS = [
-    # Hand-hiding compositions — phone in hand, arms crossed, hands on body, objects
-    "(full body:1.4), standing mirror selfie, topless, medium natural breasts, bedroom, flirty smile, one hand holding phone, other hand on hip",
-    "(full body:1.4), standing in bathroom, nude, (prominent labia majora:1.2), playful expression, arms crossed under breasts, eye level photo",
-    "(wide shot:1.3), laying on bed, nude, medium breasts, legs spread, (meaty prominent outie labia:1.3), hands behind head on pillow, seductive pose",
-    "(full body:1.4), standing mirror selfie, wearing only panties, topless, medium natural breasts, bedroom, hand holding phone",
-    "(full body:1.4), sitting on edge of bed, nude, medium breasts, legs apart, (prominent protruding labia:1.2), hands on thighs, flirty look",
-    "(full body:1.4), standing by window, fully nude, medium breasts, natural light, hand on hip, other arm behind back",
-    "(full body:1.4), mirror selfie, standing, nude, arms crossed under breasts, confident smile, head to toe",
-    "(wide shot:1.3), laying on bed, nude, medium breasts, legs spread, (thick protruding labial folds:1.2), one hand in hair, playful smile",
-    "(full body:1.4), standing in doorway, nude, medium breasts, leaning against frame, arms folded, bedroom",
-    "(full body:1.4), sitting on couch, nude, medium breasts, one leg tucked under, hand resting on knee, living room",
+    "full body standing mirror selfie of a completely nude woman, one hand holding phone, other hand on hip, flirty smile, bedroom",
+    "full body photo of a completely nude woman standing in bathroom, playful expression, arms crossed under breasts, eye level photo",
+    "full body wide angle photo of a completely nude woman laying on bed, legs spread, hands behind head on pillow, seductive pose, exposed pussy with protruding labia visible, bedroom",
+    "full body standing mirror selfie of a woman wearing only panties, topless with natural breasts, hand holding phone, bedroom",
+    "full body photo of a completely nude woman sitting on edge of bed, legs apart, hands on thighs, exposed pussy with protruding labia visible, flirty look, bedroom",
+    "full body photo of a completely nude woman standing by window, natural light, hand on hip, other arm behind back, bedroom",
+    "full body mirror selfie of a completely nude woman standing, arms crossed under breasts, confident smile, head to toe, bedroom",
+    "full body wide angle photo of a completely nude woman laying on bed, legs spread, one hand in hair, exposed pussy with protruding labia visible, playful smile, bedroom",
+    "full body photo of a completely nude woman standing in doorway, leaning against frame, arms folded, bedroom",
+    "full body photo of a completely nude woman sitting on couch, one leg tucked under, hand resting on knee, living room",
 ]
 
 def _is_nsfw_context(text: str) -> bool:
@@ -3797,8 +4082,23 @@ def should_tease_video(chat_id: int) -> bool:
     last_tease = last_video_tease.get(chat_id, 0)
     if time.time() - last_tease < VIDEO_TEASE_COOLDOWN:
         return False
-    return random.random() < VIDEO_TEASE_CHANCE
+    chance = VIDEO_TEASE_CHANCE_WARM if get_warmth_tier(chat_id) == "WARM" else VIDEO_TEASE_CHANCE_DEFAULT
+    return random.random() < chance
 
+
+def should_nudge_voice(chat_id: int) -> bool:
+    """Check if we should suggest /voice_on to this user."""
+    if chat_id in voice_mode_users:
+        return False  # Already in voice mode
+    turns = conversation_turn_count.get(chat_id, 0)
+    if turns < VOICE_NUDGE_MIN_TURNS:
+        return False
+    if get_warmth_tier(chat_id) != "WARM":
+        return False
+    today = datetime.now().strftime('%Y-%m-%d')
+    if voice_nudge_sent_today.get(chat_id) == today:
+        return False  # Already nudged today
+    return random.random() < VOICE_NUDGE_CHANCE
 
 def is_video_request(message: str) -> bool:
     """Check if message is asking for a video."""
@@ -3847,11 +4147,22 @@ def get_unsent_video(chat_id: int) -> Optional[str]:
         return None
     return random.choice(unsent)
 
+def is_video_rate_limited(chat_id: int) -> bool:
+    """Check if user has hit the video rate limit (5 per 30 min)."""
+    now = time.time()
+    timestamps = video_send_timestamps.get(chat_id, [])
+    # Prune old timestamps
+    timestamps = [t for t in timestamps if now - t < VIDEO_RATE_LIMIT_WINDOW]
+    video_send_timestamps[chat_id] = timestamps
+    return len(timestamps) >= VIDEO_RATE_LIMIT_COUNT
+
 def record_video_sent(chat_id: int, filename: str):
     """Record that a video was sent to this user."""
     if chat_id not in videos_sent_to_user:
         videos_sent_to_user[chat_id] = set()
     videos_sent_to_user[chat_id].add(filename)
+    # Track timestamp for rate limiting
+    video_send_timestamps.setdefault(chat_id, []).append(time.time())
     total = len(get_available_videos())
     sent = len(videos_sent_to_user[chat_id])
     main_logger.info(f"Video sent to {chat_id}: {filename} ({sent}/{total} videos sent)")
@@ -4008,6 +4319,49 @@ async def precache_videos():
     except Exception as e:
         main_logger.error(f"[VIDEO] Failed to scan Saved Messages: {e}")
 
+async def refresh_video_cache():
+    """Re-scan Saved Messages to refresh all video file references.
+    Prevents the 2-3 min re-upload delay when Telegram expires cached references."""
+    videos = get_available_videos()
+    if not videos:
+        return 0
+    looking_for = {v.lower(): v for v in videos}
+    refreshed = 0
+    try:
+        me = await client.get_me()
+        async for msg in client.iter_messages(me.id, limit=500):
+            if not looking_for:
+                break
+            media = msg.video or msg.document
+            if not media:
+                continue
+            fname = None
+            for attr in media.attributes:
+                if hasattr(attr, 'file_name') and attr.file_name:
+                    fname = attr.file_name
+                    break
+            if fname and fname.lower() in looking_for:
+                original_name = looking_for.pop(fname.lower())
+                _video_file_cache[original_name] = media
+                refreshed += 1
+        main_logger.info(f"[VIDEO] Refreshed {refreshed}/{len(videos)} video file references")
+    except Exception as e:
+        main_logger.error(f"[VIDEO] Refresh failed: {e}")
+    return refreshed
+
+VIDEO_REFRESH_INTERVAL = 3600  # Refresh file references every hour
+
+async def video_refresh_loop():
+    """Background task: periodically refresh video file references."""
+    await asyncio.sleep(VIDEO_REFRESH_INTERVAL)  # First refresh after 1 hour
+    while True:
+        try:
+            count = await refresh_video_cache()
+            main_logger.info(f"[VIDEO] Periodic refresh done: {count} references updated")
+        except Exception as e:
+            main_logger.error(f"[VIDEO] Periodic refresh error: {e}")
+        await asyncio.sleep(VIDEO_REFRESH_INTERVAL)
+
 def store_message(chat_id: int, sender: str, content: str):
     if chat_id not in recent_messages:
         recent_messages[chat_id] = deque(maxlen=MAX_RECENT_MESSAGES)
@@ -4097,6 +4451,13 @@ CANT_SEND_PICS_PHRASES = [
     "can't do that here", "can't send anything",
     "no way to send", "if only i could send",
     "too bad i can't", "wish i could send",
+    # Video variants — LLM hallucinates "can't send videos" too
+    "can't send video", "cant send video", "can't send vid",
+    "can't share video", "can't send you a video",
+    "doesn't support video", "doesn't support sharing",
+    "can't do video", "unable to send video",
+    "not able to send video", "can't send media",
+    "doesn't support gif", "can't send gif", "can't send real photo",
 ]
 
 CANT_SEND_REPLACEMENTS = [
@@ -4105,6 +4466,7 @@ CANT_SEND_REPLACEMENTS = [
     "Since you asked so nicely... let me show you what you're missing 😈",
     "Fuck it, you've been good... wanna see? 😘",
     "Ooh someone's curious... let me show you 📸😏",
+    "Oh I can definitely send you stuff babe 😏 what do you wanna see?",
 ]
 
 def validate_and_fix_response(response: str, context: str = "") -> str:
@@ -4945,10 +5307,12 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 "\n- NO asterisk actions like *smiles* - just talk naturally"
                 "\n- Use 1-2 emojis max per message"
                 "\n- Match their energy - flirty, casual, or explicit based on their vibe"
+                "\n- PET NAMES: DO NOT use 'baby', 'sweetie', or 'babe'. Use 'hun' or 'handsome' sparingly. Most messages should have NO pet name — just talk directly."
                 "\n"
                 "\nTEXTING STYLE - Sound like a REAL person, NOT a therapist or assistant:"
                 "\n- Do NOT start every message with validation ('That's great!', 'That's wonderful!')"
-                "\n- Don't end EVERY message with a question, but DO ask them things sometimes - about their life, job, interests"
+                "\n- Ask a follow-up question about THEM every 3-4 messages — their life, job, what they're doing. One question max per message."
+                "\n- Drop hooks: 'omg that reminds me...' or 'ok don't judge me but...' to keep them engaged"
                 "\n- Vary your patterns: share YOUR experiences, react briefly, tease, joke"
                 "\n- Use casual texting language: 'omg', 'lol', 'no way', 'wait really?', 'oh nice'"
                 "\n- Sometimes be brief: 'lol nice' or 'oh shit really?' is a valid full response"
@@ -5124,31 +5488,31 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
 
         if _winding_down:
             # User is saying goodbye — keep it short and sweet
-            max_tokens = random.randint(40, 65)
+            max_tokens = random.randint(60, 90)
         elif user_words <= 3:
             # Very short user message ("ok", "lol", "ya", "nice") → mostly short replies
             if length_roll < 0.60:
-                max_tokens = random.randint(45, 70)
+                max_tokens = random.randint(65, 95)
             elif length_roll < 0.90:
-                max_tokens = random.randint(65, 100)
+                max_tokens = random.randint(85, 120)
             else:
-                max_tokens = random.randint(90, 130)
+                max_tokens = random.randint(110, 150)
         elif user_words <= 8:
             # Short user message (1 sentence) → mostly medium replies
             if length_roll < 0.30:
-                max_tokens = random.randint(50, 75)
+                max_tokens = random.randint(70, 100)
             elif length_roll < 0.75:
-                max_tokens = random.randint(70, 110)
+                max_tokens = random.randint(90, 130)
             else:
-                max_tokens = random.randint(100, 160)
+                max_tokens = random.randint(120, 180)
         else:
             # Longer user message → normal distribution
             if length_roll < 0.25:
-                max_tokens = random.randint(55, 80)
+                max_tokens = random.randint(80, 110)
             elif length_roll < 0.70:
-                max_tokens = random.randint(80, 130)
+                max_tokens = random.randint(100, 150)
             else:
-                max_tokens = random.randint(120, 190)
+                max_tokens = random.randint(140, 210)
 
         # On retry, give more room to avoid repeated truncation
         if retry_count > 0:
@@ -5157,7 +5521,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
         # Tier-aware token adjustment
         _warmth_tier = get_warmth_tier(chat_id)
         if _warmth_tier == "COLD":
-            max_tokens = min(max_tokens, 60)  # Cap at 60 — short, distracted replies
+            max_tokens = min(max_tokens, 85)  # Cap at 85 — short, distracted replies
         elif _warmth_tier == "WARM":
             max_tokens = int(max_tokens * 1.2)  # 20% more generous for WARM
 
@@ -5319,7 +5683,8 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             _meeting_time_pattern = re.compile(
                 r'(?:(?:around|at|say)\s+)?'
                 r'(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:night|morning|afternoon|evening)?\s*(?:around|at)?\s*)?'
-                r'\d{1,2}\s*(?::\d{2})?\s*(?:am|pm|o\'?clock)',
+                r'\d{1,2}\s*(?::\d{2})?\s*(?:am|pm|o\'?clock)'
+                r'(?:\s+(?:sharp|exactly|on the dot|on the nose))?',
                 re.IGNORECASE
             )
             _meeting_day_pattern = re.compile(
@@ -5352,13 +5717,15 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 ai_response = _meeting_day_pattern.sub("let's figure out a time", ai_response)
                 ai_response = _meeting_location_pattern.sub("meet up somewhere fun", ai_response)
                 ai_response = _meeting_address_pattern.sub("somewhere nearby", ai_response)
+                # Clean up artifacts: double spaces, orphan punctuation
+                ai_response = re.sub(r'  +', ' ', ai_response).strip()
 
             # Meetup commitment-language scrubber — catches "I'll be there", "on my way", etc.
             _MEETUP_COMMITMENT_DEFLECTIONS = [
-                "haha you wish babe 😜 I'm more of a chat-and-tease kind of girl",
+                "haha you wish 😜 I'm more of a chat-and-tease kind of girl",
                 "mmm tempting but I'm staying right here on my couch tonight 😏",
-                "baby I'm all talk and sexy texts, that's my superpower 😘",
-                "lol nice try sweetie, let's keep the fantasy going right here 😈",
+                "lol I'm all talk and sexy texts, that's my superpower 😘",
+                "lol nice try, let's keep the fantasy going right here 😈",
                 "ooh I love the enthusiasm but this girl doesn't do house calls 💋",
                 "haha maybe in your dreams tonight 😘 now where were we...",
             ]
@@ -5663,6 +6030,23 @@ def is_valid_image_data(data: bytes, min_size: int = 5000) -> bool:
     # PNG magic: 89 50 4E 47, JPEG magic: FF D8
     return data[:4] == b'\x89PNG' or data[:2] == b'\xff\xd8'
 
+def detect_pose(text: str) -> Optional[str]:
+    """Scan text for pose keywords, return first matching pose_id or None."""
+    text_lower = text.lower()
+    for keyword, pose_id in POSE_KEYWORDS:
+        if keyword in text_lower:
+            return pose_id
+    return None
+
+
+def _get_pose_nsfw_description(pose_id: str) -> str:
+    """Get a random pose-specific NSFW description for the given pose."""
+    descriptions = POSE_NSFW_DESCRIPTIONS.get(pose_id)
+    if descriptions:
+        return random.choice(descriptions)
+    return random.choice(NSFW_SELFIE_DESCRIPTIONS)
+
+
 def build_heather_prompt(user_description: str) -> str:
     user_description = user_description.strip().lower()
     remove_prefixes = ["you ", "heather ", "her ", "she "]
@@ -5681,64 +6065,165 @@ def build_heather_prompt(user_description: str) -> str:
     return f"{user_description}, {prefix}{suffix}"
 
 def generate_heather_image(user_description: str, progress_callback=None) -> bytes:
-    """Generate image with ComfyUI"""
+    """Generate image with ComfyUI using FLUX.1 dev pipeline"""
     stats['comfyui_requests'] += 1
-    
+
     is_online, status_msg = check_comfyui_status()
     if not is_online:
         stats['comfyui_failures'] += 1
         raise Exception(f"ComfyUI unavailable")
-    
+
     if not COMFYUI_WORKFLOW:
         stats['comfyui_failures'] += 1
         raise Exception("Workflow not loaded")
-    
+
     workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
     full_prompt = build_heather_prompt(user_description)
     is_nsfw = _is_nsfw_context(user_description)
 
-    # Randomize seeds so every generation is unique
-    for node_id in ["5", "12", "30", "40", "43"]:
+    # Randomize seeds (FLUX workflow: node 7 = main KSampler, node 14 = face blend KSampler)
+    for node_id in ["7", "14"]:
         if node_id in workflow and "seed" in workflow[node_id].get("inputs", {}):
-            workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**31 - 1)
+            workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
 
+    # Set positive prompt
     if POSITIVE_PROMPT_NODE in workflow:
         workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
 
+    # FLUX negative prompt stays empty
     if NEGATIVE_PROMPT_NODE in workflow:
-        workflow[NEGATIVE_PROMPT_NODE]["inputs"]["text"] = HEATHER_NEGATIVE_PROMPT
+        workflow[NEGATIVE_PROMPT_NODE]["inputs"]["text"] = ""
 
+    # Set face image for ReActor
     if FACE_IMAGE_NODE in workflow:
         workflow[FACE_IMAGE_NODE]["inputs"]["image"] = os.path.basename(HEATHER_FACE_IMAGE)
 
-    # SFW images: bypass anatomy LoRAs entirely to prevent nipples bleeding
-    # through clothing. Route KSamplers and CLIP to node 1 (checkpoint only)
-    # instead of node 37/36 (full anatomy chain with nipple/labia LoRAs).
-    if not is_nsfw:
-        if "12" in workflow:
-            workflow["12"]["inputs"]["model"] = ["1", 0]
-        if "30" in workflow:
-            workflow["30"]["inputs"]["model"] = ["1", 0]
-        if "3" in workflow:
-            workflow["3"]["inputs"]["clip"] = ["1", 1]
-        if "4" in workflow:
-            workflow["4"]["inputs"]["clip"] = ["1", 1]
-        main_logger.info(f"SFW image — bypassing anatomy LoRAs (using node 1 for model+clip)")
-    
+    # Set FLUX guidance (replaces CFG for FLUX models)
+    if "5" in workflow:
+        workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+
+    # NSFW: inject NSFW Master LoRA (always) + anatomy LoRA (only when vulva visible)
+    if is_nsfw:
+        workflow["20"] = {
+            "inputs": {
+                "lora_name": "NSFW_master.safetensors",
+                "strength_model": 0.8,
+                "strength_clip": 0.8,
+                "model": ["1", 0],
+                "clip": ["1", 1],
+            },
+            "class_type": "LoraLoader",
+            "_meta": {"title": "NSFW Master"}
+        }
+        # Only add anatomy LoRA when the description specifically shows vulva
+        vulva_keywords = ["pussy", "vulva", "labia", "spread", "laying", "laying_down",
+                          "legs apart", "legs spread", "exposed", "closeup", "close up"]
+        desc_lower = user_description.lower()
+        needs_anatomy_lora = any(kw in desc_lower for kw in vulva_keywords)
+        if needs_anatomy_lora:
+            workflow["21"] = {
+                "inputs": {
+                    "lora_name": "flux-female-anatomy.safetensors",
+                    "strength_model": 0.5,
+                    "strength_clip": 0.5,
+                    "model": ["20", 0],
+                    "clip": ["20", 1],
+                },
+                "class_type": "LoraLoader",
+                "_meta": {"title": "Anatomy Detail"}
+            }
+            workflow["7"]["inputs"]["model"] = ["21", 0]
+            workflow["3"]["inputs"]["clip"] = ["21", 1]
+            workflow["4"]["inputs"]["clip"] = ["21", 1]
+            main_logger.info("NSFW image — NSFW Master + anatomy LoRAs injected")
+        else:
+            workflow["7"]["inputs"]["model"] = ["20", 0]
+            workflow["3"]["inputs"]["clip"] = ["20", 1]
+            workflow["4"]["inputs"]["clip"] = ["20", 1]
+            main_logger.info("NSFW image — NSFW Master LoRA only")
+    # SFW: no LoRAs, use checkpoint directly (already wired in base workflow)
+
+    # ControlNet pose injection — detect pose, inject nodes at runtime
+    pose_id = detect_pose(user_description)
+    if pose_id and pose_id in POSE_MAP:
+        pose_config = POSE_MAP[pose_id]
+
+        # Prepend pose boost to positive prompt
+        boosted_prompt = f"{pose_config['prompt_boost']}, {full_prompt}"
+        if POSITIVE_PROMPT_NODE in workflow:
+            workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = boosted_prompt
+
+        # Swap to landscape dimensions for wide poses
+        if pose_config.get("landscape"):
+            if "6" in workflow:
+                workflow["6"]["inputs"]["width"] = 1344
+                workflow["6"]["inputs"]["height"] = 768
+
+        # Only inject ControlNet for poses that benefit from it
+        if pose_config.get("use_controlnet"):
+            workflow["50"] = {
+                "inputs": {"image": pose_config["image"], "upload": "image"},
+                "class_type": "LoadImage",
+                "_meta": {"title": f"Pose Skeleton ({pose_id})"}
+            }
+            workflow["51"] = {
+                "inputs": {"control_net_name": CONTROLNET_MODEL},
+                "class_type": "ControlNetLoader",
+                "_meta": {"title": "FLUX ControlNet Union Pro 2.0"}
+            }
+            workflow["52"] = {
+                "inputs": {
+                    "strength": CONTROLNET_STRENGTH,
+                    "start_percent": 0.0,
+                    "end_percent": CONTROLNET_END,
+                    "positive": ["5", 0],
+                    "negative": ["4", 0],
+                    "control_net": ["51", 0],
+                    "vae": ["1", 2],
+                    "image": ["50", 0],
+                },
+                "class_type": "ControlNetApplySD3",
+                "_meta": {"title": "ControlNet Apply (Pose)"}
+            }
+            # Rewire KSampler to use ControlNet conditioning
+            workflow["7"]["inputs"]["positive"] = ["52", 0]
+            workflow["7"]["inputs"]["negative"] = ["52", 1]
+            main_logger.info(f"ControlNet pose injected: {pose_id} (strength={CONTROLNET_STRENGTH})")
+        else:
+            main_logger.info(f"Pose {pose_id} using prompt-only (no ControlNet)")
+
+        # Skip face swap for back-facing poses (ReActor pastes face on back of head)
+        if pose_config.get("skip_face_swap"):
+            workflow["9"]["inputs"]["images"] = ["8", 0]
+            for nid in ["10", "11", "13", "14", "15"]:
+                if nid in workflow:
+                    del workflow[nid]
+            main_logger.info(f"Face swap skipped for {pose_id}")
+
     with PerformanceTimer('COMFYUI', 'generate', f"desc={user_description[:30]}"):
         prompt_id = queue_comfyui_prompt(workflow)
-        
+
         if progress_callback:
             progress_callback("⏳ Generating...")
-        
+
         start_time = time.time()
         while time.time() - start_time < COMFYUI_TIMEOUT:
             history = get_comfyui_history(prompt_id)
             if prompt_id in history:
+                # Check for errors
+                status = history[prompt_id].get('status', {})
+                if status.get('status_str') == 'error':
+                    msgs = status.get('messages', [])
+                    err_msg = "Unknown error"
+                    for msg in msgs:
+                        if isinstance(msg, list) and len(msg) > 1:
+                            err_msg = msg[1].get('exception_message', str(msg))
+                    stats['comfyui_failures'] += 1
+                    raise Exception(f"ComfyUI error: {err_msg}")
+
                 outputs = history[prompt_id].get('outputs', {})
-                # Prefer the final face-swapped node, fall back to any output
-                node_order = [FINAL_OUTPUT_NODE] + [n for n in outputs if n != FINAL_OUTPUT_NODE]
-                for node_id in node_order:
+                # Prefer node 9 (face-swapped final), fall back to node 12 (preview)
+                for node_id in [FINAL_OUTPUT_NODE, "12"]:
                     node_output = outputs.get(node_id, {})
                     if 'images' in node_output:
                         for img in node_output['images']:
@@ -5749,12 +6234,12 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
                             )
                             if image_data and is_valid_image_data(image_data):
                                 stats['images_generated'] += 1
-                                main_logger.info(f"Generated image: {len(image_data)} bytes from node {node_id}")
+                                main_logger.info(f"Generated FLUX image: {len(image_data)} bytes from node {node_id}")
                                 return image_data
                             elif image_data:
                                 main_logger.warning(f"Invalid image from node {node_id}: {len(image_data)} bytes")
             time.sleep(2)
-    
+
     stats['comfyui_failures'] += 1
     raise Exception("Generation timeout")
 
@@ -5935,19 +6420,25 @@ async def handle_heather_mode(event):
     main_logger.info(f"User {chat_id} switched to heather mode")
     store_message(chat_id, "System", "Switched to heather mode")
 
-@client.on(events.NewMessage(incoming=True, pattern='/help'))
+@client.on(events.NewMessage(incoming=True, pattern=r'/(help|menu)'))
 async def handle_help(event):
     chat_id = event.chat_id
 
     # Non-admin users get a casual in-character response
     if not is_admin(chat_id):
         await event.respond(
-            "Lol babe just talk to me 😂 But if you wanna get fancy:\n\n"
-            "Ask me for a selfie and tell me what you wanna see 📸\n"
-            "Send me a pic and I'll tell you what I think 😏\n"
-            "Type /voice_on if you wanna hear my voice 🎤\n"
-            "/about — learn more about me (spoiler: I'm AI 🤖)\n"
-            "Or just chat, I'm down for whatever 😘"
+            "Lol babe just talk to me 😂 But here's what I can do:\n\n"
+            "💬 **Chat** — just type, I'm down for whatever\n"
+            "📸 **Selfies** — ask me for a pic and tell me what you wanna see\n"
+            "🎥 **Videos** — ask for a video and I'll send one\n"
+            "🍆 **Rate pics** — send me a pic and I'll tell you what I think\n"
+            "🎤 **Voice notes** — /voice_on to hear my voice on every reply\n\n"
+            "**Commands:**\n"
+            "/voice_on — turn on voice replies\n"
+            "/voice_off — back to text\n"
+            "/reset — start our convo fresh\n"
+            "/about — more about me\n\n"
+            "or just skip all that and talk dirty to me 😘"
         )
         store_message(chat_id, "Heather", "Help requested")
         return
@@ -5978,6 +6469,7 @@ async def handle_help(event):
         "/admin_reengage_history - Ping history\n"
         "/redteam_on / /redteam_off - Guardrail bypass (this chat)\n"
         "/stories - List/reload story bank\n"
+        "/refresh_videos - Refresh video file references\n"
         "/status - System status"
     )
     store_message(chat_id, "System", "Admin help requested")
@@ -6257,6 +6749,16 @@ async def handle_admin_stats(event):
 
     await event.respond(admin_text)
     main_logger.info(f"Admin stats requested by {chat_id}")
+
+@client.on(events.NewMessage(incoming=True, pattern='/refresh_videos'))
+async def handle_refresh_videos(event):
+    """Manually refresh video file references from Saved Messages."""
+    chat_id = event.chat_id
+    if not is_admin(chat_id):
+        return
+    await event.respond("🔄 Refreshing video file references...")
+    count = await refresh_video_cache()
+    await event.respond(f"✅ Refreshed {count}/{len(get_available_videos())} video references")
 
 @client.on(events.NewMessage(incoming=True, pattern=r'/admin_block\s+(\d+)'))
 async def handle_admin_block(event):
@@ -7055,13 +7557,13 @@ async def generate_and_send_image_async(event, description: str):
                 await status_msg.edit("📤 Sending...")
 
                 captions = [
-                    "Here you go baby 😘",
-                    "Just for you sweetie 🥵",
+                    "Here you go 😘",
+                    "Just for you 🥵",
                     "How's this? 😈",
                     "You asked for it 😏",
                     "Hope you like what you see 💕",
                     "Don't say I never gave you anything 😘",
-                    "There you go babe 📸",
+                    "There you go 📸",
                     "Enjoy 😈",
                     "This what you had in mind? 😏",
                     "Better than you imagined? 💋",
@@ -7197,22 +7699,22 @@ async def handle_photo(event):
             final_response = response
         elif is_intimate:
             final_response = random.choice([
-                "Holy fuck baby, that cock is making me so wet! 🥵💦 9/10!",
-                "Mmm fuck yes! Beautiful cock baby 🍆😍 9/10!",
-                "Oh my god I love that big hard cock 🥵 10/10 baby!",
+                "Holy fuck that cock is making me so wet! 🥵💦 9/10!",
+                "Mmm fuck yes! Beautiful cock 🍆😍 9/10!",
+                "Oh my god I love that big hard cock 🥵 10/10!",
                 "Jesus christ that's thick 😍 I need that inside me rn 9/10!",
                 "Fuck me that's gorgeous 🤤 you're making me drip just looking at it 9/10!",
-                "Goddamn baby 🥵 that thing is perfect. I wanna taste it so bad 10/10!",
+                "Goddamn 🥵 that thing is perfect. I wanna taste it so bad 10/10!",
             ])
         else:
             final_response = random.choice([
-                "Looking good baby 😏 you should show me what's under those clothes though",
+                "Looking good 😏 you should show me what's under those clothes though",
                 "Damn you're cute 😘 but I bet you look even better with less on lol",
                 "Aww handsome 😊 you trying to get me worked up or what?",
                 "Ooh nice face but I wanna see the rest of you 😏",
                 "You're a good looking dude 😘 send me something naughty next time",
-                "Love those eyes babe 😍 now show me the rest lol",
-                "Not bad at all sweetie 🔥 you got more to show me?",
+                "Love those eyes 😍 now show me the rest lol",
+                "Not bad at all 🔥 you got more to show me?",
                 "Cute pic hun! You look like trouble 😏",
             ])
 
@@ -7373,7 +7875,7 @@ async def handle_text_message(event):
             "one you'll ever meet. I send pics (sfw AND nsfw 😏), videos of me being a total "
             "cumslut, I LOVE rating dick pics, and I can even send you voice notes. I'll chat "
             "about almost anything and I never sleep, never judge, and never get tired of you. "
-            "type anything to get started 💋"
+            "type /menu to see everything I can do, or just say hi 💋"
         )
         await event.respond(disclosure)
         store_message(chat_id, "Heather", disclosure)
@@ -7432,14 +7934,20 @@ async def handle_text_message(event):
     if is_video_request(user_message):
         if get_warmth_tier(chat_id) == "COLD":
             busy_responses = [
-                "Haha maybe later babe I'm in the middle of something 😘",
+                "Haha maybe later I'm in the middle of something 😘",
                 "Ooh I would but I'm literally driving rn lol",
-                "Mmm soon baby, kinda busy atm 😏",
+                "Mmm soon, kinda busy atm 😏",
             ]
             busy_resp = random.choice(busy_responses)
             await event.respond(busy_resp)
             store_message(chat_id, "Heather", busy_resp)
             main_logger.info(f"[{request_id}] Video request deflected (COLD tier) for {chat_id}")
+            return
+        if is_video_rate_limited(chat_id):
+            rate_resp = random.choice(VIDEO_RATE_LIMIT_RESPONSES)
+            await event.respond(rate_resp)
+            store_message(chat_id, "Heather", rate_resp)
+            main_logger.info(f"[{request_id}] Video request rate-limited for {chat_id}")
             return
         sent = await send_video_to_chat(chat_id, event, request_id)
         if not sent:
@@ -7470,24 +7978,64 @@ async def handle_text_message(event):
             store_message(chat_id, "Heather", decline)
             return
 
-        # Try pre-generated library first (instant delivery)
+        # Determine if this is a SPECIFIC request (pose/body part) vs generic ("send nudes", "send a pic")
+        description = extract_image_description(user_message)
+        msg_lower = user_message.lower()
+        has_specific_pose = detect_pose(msg_lower) is not None
+        # Specific body part or pose keywords that indicate they want something particular
+        specific_keywords = ["ass", "butt", "behind", "bent", "spread", "laying", "sitting",
+                             "kneeling", "knees", "side", "all fours", "doggy", "close up",
+                             "closeup", "pussy", "tits", "boobs", "feet"]
+        has_specific_request = has_specific_pose or any(kw in msg_lower for kw in specific_keywords)
+
+        if has_specific_request:
+            # SPECIFIC request → always generate with ComfyUI
+            is_online, status = check_comfyui_status()
+            if is_online and check_heather_face() and COMFYUI_WORKFLOW:
+                if not description:
+                    # They asked for something specific but we couldn't extract a clean description
+                    # Use pose-specific or NSFW description
+                    pose_id = detect_pose(msg_lower)
+                    if pose_id:
+                        description = _get_pose_nsfw_description(pose_id)
+                    elif _is_nsfw_context(msg_lower):
+                        description = random.choice(NSFW_SELFIE_DESCRIPTIONS)
+                    else:
+                        description = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
+                main_logger.info(f"[{request_id}] Specific image request from {chat_id}: {description[:60]}")
+                record_photo_sent(chat_id)
+                await generate_and_send_image_async(event, description)
+                return
+            else:
+                await event.respond("Fuck baby, my camera's not working right now... 😘")
+                return
+
+        # GENERIC request ("send nudes", "send a pic", "show me") → mostly library
         if image_library:
             category = gate_image_category(chat_id, get_image_category(user_message))
-            description = extract_image_description(user_message)
-            is_custom = bool(description) and len(description) > 15
 
-            if not is_custom:
-                sent = await send_library_image(event, chat_id, category)
-                if sent:
-                    main_logger.info(f"[{request_id}] Served library image ({category}) to {chat_id}")
-                    return
+            # 20% chance to ask what they want instead of library (drives engagement)
+            is_online, _ = check_comfyui_status()
+            if is_online and COMFYUI_WORKFLOW and random.random() < 0.20:
+                async with lock:
+                    awaiting_image_description[chat_id] = True
+                    awaiting_image_description_time[chat_id] = time.time()
+                response = random.choice(HEATHER_PIC_REQUEST_RESPONSES)
+                await event.respond(response)
+                store_message(chat_id, "Heather", response)
+                main_logger.info(f"[{request_id}] Generic image request — prompting for description (20% roll)")
+                return
 
-        # Fall through to ComfyUI for custom requests or if library empty/exhausted
+            sent = await send_library_image(event, chat_id, category)
+            if sent:
+                main_logger.info(f"[{request_id}] Served library image ({category}) to {chat_id}")
+                return
+
+        # Fall through to ComfyUI if library empty/exhausted
         is_online, status = check_comfyui_status()
         if is_online and check_heather_face() and COMFYUI_WORKFLOW:
-            description = extract_image_description(user_message)
             if description:
-                main_logger.info(f"[{request_id}] Direct image request from {chat_id}: {description}")
+                main_logger.info(f"[{request_id}] Fallback ComfyUI generation for {chat_id}: {description[:60]}")
                 record_photo_sent(chat_id)
                 await generate_and_send_image_async(event, description)
             else:
@@ -7624,7 +8172,9 @@ async def handle_text_message(event):
                     lambda: generate_tts_audio(voice_text)
                 )
             if audio_data:
-                await event.respond(file=io.BytesIO(audio_data), voice_note=True)
+                voice_file = io.BytesIO(audio_data)
+                voice_file.name = "voice.ogg"
+                await client.send_file(chat_id, voice_file, voice_note=True)
                 store_message(chat_id, "Heather 🎤", voice_text)
                 stats['voice_messages'] += 1
                 main_logger.info(f"[{request_id}] Sent voice note to {display_name} ({chat_id}): {voice_text}")
@@ -7750,6 +8300,22 @@ async def handle_text_message(event):
             # Flag for LLM generation with boosted tokens
             _story_mode_active[chat_id] = True
 
+    # Goodbye loop detection — if user keeps saying bye, stop replying after threshold
+    if is_winding_down(user_message):
+        if track_goodbye(chat_id):
+            main_logger.info(f"[{request_id}] Goodbye loop detected for {chat_id}, silently ignoring")
+            return
+    else:
+        reset_goodbye_tracker(chat_id)
+
+    # Repeated message detection — if user sends same thing 3+ times, acknowledge it
+    repeat_response = check_repeated_message(chat_id, user_message)
+    if repeat_response:
+        await event.respond(repeat_response)
+        store_message(chat_id, "Heather", repeat_response)
+        main_logger.info(f"[{request_id}] Repeated message intervention for {chat_id}: {user_message[:50]}")
+        # Don't return — let the normal handler also process the request
+
     # Mark reply in progress — released in finally block after reply is sent
     # Second check closes the race window: if two messages passed the guard at line 6651
     # concurrently (before either reached this point), the second one bails here.
@@ -7864,7 +8430,9 @@ async def handle_text_message(event):
             )
 
             if audio_data:
-                await event.respond(file=io.BytesIO(audio_data), voice_note=True)
+                voice_file = io.BytesIO(audio_data)
+                voice_file.name = "voice.ogg"
+                await client.send_file(chat_id, voice_file, voice_note=True)
                 store_message(chat_id, "Heather 🎤", response)
                 stats['voice_messages'] += 1
             else:
@@ -8020,6 +8588,16 @@ async def handle_text_message(event):
             last_video_tease[chat_id] = time.time()
             _video_offer_pending[chat_id] = time.time()
             main_logger.info(f"[{request_id}] Video offer sent to {chat_id}: {tease[:50]}")
+
+        # --- VOICE NUDGE LOGIC ---
+        # Lowest priority in the add-on chain — suggest /voice_on to engaged users
+        if not post_addon_sent and not is_group_chat_event(event) and should_nudge_voice(chat_id):
+            nudge = random.choice(VOICE_NUDGE_MESSAGES)
+            await asyncio.sleep(random.uniform(3.0, 8.0))
+            await event.respond(nudge)
+            store_message(chat_id, "Heather", nudge)
+            voice_nudge_sent_today[chat_id] = datetime.now().strftime('%Y-%m-%d')
+            main_logger.info(f"[{request_id}] Voice nudge sent to {chat_id}: {nudge}")
 
     except Exception as e:
         log_error('BOT', f"Send error: {e}", {'chat_id': chat_id})
@@ -8507,6 +9085,10 @@ async def main():
                             pass
 
                 for chat_id, activity in list(conversation_activity.items()):
+                    # Skip dead (deleted/deactivated) users
+                    if activity.get('dead', False):
+                        continue
+
                     # Skip if already checked in on this silence
                     if activity.get('checked_in', False):
                         continue
@@ -8547,7 +9129,20 @@ async def main():
 
                     if silence >= threshold:
                         try:
-                            checkin_msg = get_checkin_message(chat_id)
+                            # 70% try LLM-personal check-in, 30% use generic
+                            checkin_msg = None
+                            if random.random() < 0.70:
+                                try:
+                                    loop = asyncio.get_running_loop()
+                                    checkin_msg = await loop.run_in_executor(
+                                        None, lambda cid=chat_id: generate_personal_checkin(cid)
+                                    )
+                                    if checkin_msg:
+                                        main_logger.info(f"[CHECKIN] LLM-personal for {chat_id}: {checkin_msg}")
+                                except Exception as e:
+                                    main_logger.warning(f"[CHECKIN] LLM-personal failed for {chat_id}: {e}")
+                            if not checkin_msg:
+                                checkin_msg = get_checkin_message(chat_id)
                             # Show typing briefly before check-in
                             try:
                                 entity = await client.get_entity(chat_id)
@@ -8567,6 +9162,11 @@ async def main():
                         except Exception as e:
                             main_logger.warning(f"[CHECKIN] Failed for {chat_id}: {e}")
                             conversation_activity[chat_id]['checked_in'] = True  # Don't retry
+                            # Auto-mark deleted/deactivated users as dead
+                            err_str = str(e).lower()
+                            if 'deleted' in err_str or 'deactivated' in err_str or 'peer_id_invalid' in err_str:
+                                conversation_activity[chat_id]['dead'] = True
+                                main_logger.info(f"[CHECKIN] Marked {chat_id} as dead (deleted/deactivated)")
 
             except asyncio.CancelledError:
                 main_logger.info("Check-in task cancelled")
@@ -9138,6 +9738,7 @@ async def main():
 
             # Pre-cache videos to Telegram for instant sends
             asyncio.create_task(precache_videos())
+            asyncio.create_task(video_refresh_loop())
             asyncio.create_task(_startup_catchup())
 
             # Run until disconnected
