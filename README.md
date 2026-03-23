@@ -26,23 +26,30 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
                |    port 8888      |
                +--------+----------+
                         |
-           +------------+------------+
-           |                         |
-  +--------+----------+     +--------+----------+
-  |  Frank Dashboard  |     |   OpenClaw MGMT   |
-  | (Reddit+FetLife)  |     | (Autonomous Agent)|
-  |    port 8080      |     |  @HeatherMGMTBot  |
-  +-------------------+     +-------------------+
+           +-----+------+------+------------+
+           |            |                    |
+  +--------+-------+  +-+-------------+  +--+--------------+
+  | Frank Dashboard |  | Discord Bot   |  | OpenClaw MGMT   |
+  | (Reddit/FetLife)|  | (discord.py)  |  | (Autonomous Agt)|
+  |   port 8080     |  +---------------+  +-----------------+
+  +--------+-------+
+           |
+  +--------+-------+
+  | Twitter/X Bot   |
+  | (Tweepy API)    |
+  +----------------+
 ```
 
 | Service | Port | Purpose |
 |---------|------|---------|
 | llama-server | 1234 | Text generation (llama.cpp with any GGUF model) |
 | Ollama | 11434 | Image analysis (LLaVA or similar vision model) |
-| ComfyUI | 8188 | Image generation (FLUX.1 dev FP8) with face-swap workflows |
+| ComfyUI | 8188 | Image generation (FLUX.1 dev FP8 or SDXL) with face-swap workflows |
 | Chatterbox TTS | 5001 | Voice synthesis (voice cloning) |
 | Bot Monitor | 8888 | Web dashboard for analytics and admin |
 | Frank Dashboard | 8080 | Multi-platform outreach (Reddit + FetLife auto-funnel) |
+| Discord Bot | — | Community server with scheduled posting and auto-welcome |
+| Twitter/X | — | Automated tweeting via Tweepy (Jen Dvorak persona) |
 
 ## Features
 
@@ -56,8 +63,8 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
 - **Voice messages** — Chatterbox TTS voice cloning for sending voice notes that sound like the character.
 - **Story system** — Pre-written story bank (YAML) with 60/40 banked/LLM-generated split, per-user rotation.
 - **Video delivery** — Pre-cached video library with offer-and-deliver flow.
-- **Tipping system** — Telegram Stars integration via a companion BotFather bot. Tiered access (free/paid/VIP).
-- **Post-processing pipeline** — 7-stage filter: strips thinking tags, asterisk actions, bracketed metadata, GLM artifacts, AI denial claims, unprompted AI self-identification, and quote wrapping.
+- **Content tier system** — FREE (teased NSFW) → FAN (explicit, 50 stars) → VIP (unrestricted, 200 stars). Telegram Stars integration via companion BotFather bot with deep-linked tip prompts.
+- **Post-processing pipeline** — 7-stage filter: strips thinking tags, asterisk actions, bracketed metadata, GLM artifacts, AI denial claims, unprompted AI self-identification, and quote wrapping. Optional human imperfections (typos, abbreviations) at 12% chance for realism.
 - **Monitoring dashboard** — Real-time Flask dashboard with user analytics, conversation logs, and conversion funnels.
 - **Content safety** — CSAM flag-and-review system, blocked user management, admin alerts, gender violation detection.
 - **AI disclosure** — Automatic first-message disclosure, bio tag, reality-check responses that own the AI status without breaking character.
@@ -65,6 +72,8 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
 - **Breeding/CNC injection** — Contextual breeding and CNC fantasy prompts that inject based on keyword detection or conversation energy level.
 - **Domme mode** — Detects humiliation/degradation requests and switches to dominant personality overlay.
 - **Arousal tracking** — Detects climax/heated/afterglow states and adjusts responses accordingly.
+- **Single-char spam detection** — Catches rapid single-character message spam and responds with canned messages instead of burning LLM tokens.
+- **Meetup/verification deflection** — Persistent deflection for meetup requests and verification demands, carries across multiple messages.
 
 ### Kink Persona System
 - **17 adaptive personas** — breeding, MILF/age-gap, CNC/rough, cuckold, BBC/size, GFE/intimate, deepthroat/oral, gangbang, voyeur/exhib, domme/mommy, anal, free-use, forced-bi, body-worship, findom, stepfamily, uber-slut
@@ -74,16 +83,32 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
 - **Persona definitions** in `heather_kink_personas.yaml` — each persona includes core traits, verbal responses, physical details, session flow, and cuckold/Frank integration
 
 ### Frank Dashboard (Multi-Platform Outreach)
-- **Reddit + FetLife automation** — Two Playwright browsers manage conversations on both platforms simultaneously
+- **Reddit + FetLife automation** — Playwright browser manages Reddit conversations; OpenClaw managed browser handles FetLife messaging and content posting
 - **Stage-aware Frank AI** — Dolphin 12B generates responses as "Frank" (cuckold husband character) with 3-stage conversation strategy: rapport building → Telegram pitch → post-pitch follow-up
 - **Auto-send** — Replies are automatically queued with 2-8 minute random delays (human texting pace). Hold keywords flag risky messages for manual review.
 - **Reddit chat layers** — Handles standard chats, regular Requests, and NSFW Additional Requests (all three layers automated)
 - **Catch-up replier** — Background task scans database every 2 minutes for conversations where the last message is inbound and auto-replies
 - **Unified dashboard** — Web UI at port 8080 with platform badges (R/FL), conversation management, AI suggestion approval, and metrics
-- **Transparent digital twin pitch** — Frank sells both "live Heather on Telegram" and "filthy digital twin with zero guardrails" as VIP access
+- **Frank Content API** — Shared content generation endpoint for consistent Frank voice across all platforms
+- **Self-healing watchdog** — Monitors dashboard health, browser status, and message flow. Auto-fixes common failures and escalates to Claude Code CLI when self-healing fails.
+
+### Discord Bot
+- **Auto-channel creation** — Sets up introductions, heather-pics, stories, rate-my-dick channels on join
+- **Scheduled image posting** — Posts character images every 4 hours
+- **Daily story posting** — Publishes LLM-generated stories once per day
+- **New member welcome** — Automatic greeting with character introduction
+- **Commands** — `/pic` (send image), `/invite` (generate invite link)
+
+### Twitter/X Bot (Jen Dvorak Persona)
+- **Separate character** — Jen Dvorak (@UberSlutty), an Uber-driving slut mom persona defined in `jen_twitter_persona.yaml`
+- **Automated tweeting** — 3 posts/day via Tweepy (morning, afternoon, evening)
+- **Content mix** — 8 tweet types: uber stories, mom contrast, body confidence, horniness, tip humor, morning/evening shift, funnel
+- **Curated video library** — Video classification pipeline using llama3.2-vision (86% accuracy) identifies car-interior content for on-brand tweets
+- **Funnel integration** — 1 in 5 tweets soft-plugs Telegram/Discord for conversion
 
 ### Autonomous Management (OpenClaw MGMT)
 - **Heartbeat monitoring** — 30-minute cycle checks all services, error rates, engagement metrics
+- **Scheduling ownership** — All recurring tasks (Twitter posting, FetLife replier, dashboard watchdog, video classification) run from OpenClaw heartbeat
 - **Dashboard monitoring** — Confirms Frank Dashboard health, reports metrics every 4 hours
 - **Kink persona reporting** — Scans user profiles for persona distribution, reports trends
 - **Personality tuning** — Authorized to edit persona YAML directly for prompt tweaks
@@ -298,14 +323,24 @@ heather-bot/                    # Core Telegram bot
   heather_personality.yaml      # Character persona definition
   heather_kink_personas.yaml    # 17 adaptive kink persona overlays
   user_memory.py                # Per-user memory + kink scoring
-  postprocess.py                # 7-stage response filter
+  postprocess.py                # 7-stage response filter + human imperfections
+  heather_discord_bot.py        # Discord community bot
+  jen_twitter_persona.yaml      # Twitter/X persona definition
+  generate_batch_sdxl.py        # SDXL batch image generator with LoRA stacking
+  faceswap_batch.py             # ReActor face swap batch processor
+  classify_car_v2.py            # Video classifier (llama3.2-vision)
+  hourly_memory_check.py        # Memory consolidation checker
+  generate_pose_skeletons.py    # OpenPose skeleton generator for ControlNet
   user_profiles/                # Per-user JSON profiles (auto-generated)
 
 heather-reddit/                 # Multi-platform outreach dashboard
-  app.py                        # FastAPI + background tasks
-  ai_frank.py                   # Stage-aware Frank AI
+  app.py                        # FastAPI + background tasks + Frank Content API
+  ai_frank.py                   # Stage-aware Frank AI with safety filters
+  frank_content_api.py          # Frank + Jen content generation via Dolphin
+  twitter_poster.py             # Twitter/X posting via Tweepy
   reddit_monitor.py             # Reddit Playwright automation
-  fetlife_monitor.py            # FetLife Playwright automation
+  fetlife_replier.py            # FetLife inbox replier via OpenClaw browser
+  dashboard_watchdog.py         # Self-healing watchdog with Claude Code escalation
   database.py                   # SQLite with platform support
   static/                       # Dashboard frontend
 ```
