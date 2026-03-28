@@ -71,7 +71,7 @@ parser.add_argument('--monitoring', action='store_true', help='Enable monitoring
 parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 parser.add_argument('--text-port', type=int, default=11434, help='Text AI model port')
 parser.add_argument('--image-port', type=int, default=11434, help='Ollama port for images')
-parser.add_argument(' --comfyui-port', type=int, default=8188, help='ComfyUI port for images')
+parser.add_argument('--comfyui-port', type=int, default=8188, help='ComfyUI port for images')
 parser.add_argument('--log-dir', type=str, default='logs', help='Log directory path')
 parser.add_argument('--tts-port', type=int, default=5001, help='TTS service port (default: 5001)')
 parser.add_argument('--personality', type=str, default='persona_example.yaml', help='Personality YAML file path')
