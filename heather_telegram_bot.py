@@ -64,6 +64,8 @@ try:
 except ImportError:
     pass
 
+env_persona = os.getenv("HEATHER_PERSONA", "persona_example.yaml")
+
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Heather Telegram Userbot v3.0 - Telethon Edition')
 parser.add_argument('--unfiltered', action='store_true', help='Run without content filters')
@@ -74,7 +76,9 @@ parser.add_argument('--image-port', type=int, default=11434, help='Ollama port f
 parser.add_argument('--comfyui-port', type=int, default=8188, help='ComfyUI port for images')
 parser.add_argument('--log-dir', type=str, default='logs', help='Log directory path')
 parser.add_argument('--tts-port', type=int, default=5001, help='TTS service port (default: 5001)')
-parser.add_argument('--personality', type=str, default='persona_example.yaml', help='Personality YAML file path')
+parser.add_argument('--personality', type=str, 
+                    default=os.path.join(CONFIG_DIR, env_persona),
+                    help='Personality YAML file path')
 parser.add_argument('--small-model', action='store_true', help='Use optimized prompt for 12B models')
 parser.add_argument('--session', type=str, default='heather_session', help='Telethon session file name')
 args = parser.parse_args()
