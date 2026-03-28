@@ -383,7 +383,6 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Set in .env for admin co
 ALERT_COOLDOWN_SECONDS = 300  # Don't spam alerts more than once per 5 minutes per issue
 
 # Endpoints
-TEXT_AI_ENDPOINT = TEXT_AI_URL
 IMAGE_AI_ENDPOINT = IMG_URL
 TTS_ENDPOINT = TTS_URL
 COMFYUI_ENDPOINT = COMFYUI_URL
@@ -6313,7 +6312,7 @@ def generate_tts_audio(text: str) -> Optional[bytes]:
 
 # Create the Telethon client
 session_path = os.path.join('data', 'heather_session')
-client = TelegramClient(session_path, api_id, api_hash)
+client = TelegramClient(session_path, API_ID, API_HASH)
 
 # ============================================================================
 # TELETHON EVENT HANDLERS
