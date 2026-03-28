@@ -64,15 +64,14 @@ try:
 except ImportError:
     pass
 
-# Set Hugging Face cache to the persistent data directory
-os.environ["HF_HOME"] = os.path.join(DATA_DIR, "huggingface")
-
 DATA_DIR = "/app/data"
 CONFIG_DIR = "/app/config"
 # Ensure the directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
+# Set Hugging Face cache to the persistent data directory
+os.environ["HF_HOME"] = os.path.join(DATA_DIR, "huggingface")
 env_persona = os.getenv("HEATHER_PERSONA", "persona_example.yaml")
 
 # Parse command-line arguments
