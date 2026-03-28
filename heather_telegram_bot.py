@@ -210,7 +210,12 @@ class PersonalityLoader:
     """Loads and manages character personality from YAML configuration."""
     
     def __init__(self, yaml_path: str):
-        self.yaml_path = Path(yaml_path)
+        potential_config_path = os.path.join(CONFIG_DIR, yaml_path)
+        if not os.path.isabs(yaml_path) and os.path.exists(potential_config_path):
+            self.yaml_path = Path(potential_config_path)
+        else:
+            self.yaml_path = Path(yaml_path)
+            
         self.personality: Dict[str, Any] = {}
         self.load()
     
