@@ -69,8 +69,9 @@ parser = argparse.ArgumentParser(description='Heather Telegram Userbot v3.0 - Te
 parser.add_argument('--unfiltered', action='store_true', help='Run without content filters')
 parser.add_argument('--monitoring', action='store_true', help='Enable monitoring interface on port 8888')
 parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-parser.add_argument('--text-port', type=int, default=1234, help='Text AI model port (default: 1234)')
-parser.add_argument('--image-port', type=int, default=11434, help='Ollama port for images (default: 11434)')
+parser.add_argument('--text-port', type=int, default=11434, help='Text AI model port')
+parser.add_argument('--image-port', type=int, default=11434, help='Ollama port for images')
+parser.add_argument(' --comfyui-port', type=int, default=8188, help='ComfyUI port for images')
 parser.add_argument('--log-dir', type=str, default='logs', help='Log directory path')
 parser.add_argument('--tts-port', type=int, default=5001, help='TTS service port (default: 5001)')
 parser.add_argument('--personality', type=str, default='persona_example.yaml', help='Personality YAML file path')
@@ -78,22 +79,45 @@ parser.add_argument('--small-model', action='store_true', help='Use optimized pr
 parser.add_argument('--session', type=str, default='heather_session', help='Telethon session file name')
 args = parser.parse_args()
 SMALL_MODEL_MODE = args.small_model
+DATA_DIR = "/app/data"
+CONFIG_DIR = "/app/config"
+# Ensure the directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(CONFIG_DIR, exist_ok=True)
 
 # ============================================================================
 # TELETHON CONFIGURATION (replaces TELEGRAM_TOKEN)
 # ============================================================================
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+LLM_URL = os.getenv("LLM_URL", f"http://127.0.0.1:{args.text_port}").rstrip('/')
+TTS_URL = os.getenv("TTS_URL", f"http://127.0.0.1:{args.tts_port}").rstrip('/')
+IMG_URL = os.getenv("IMG_URL", f"http://127.0.0.1:{args.image_port}").rstrip('/')
+COMFYUI_URL = os.getenv("COMFYUI_URL", f"http://127.0.0.1:{args.comfyui_port}").rstrip('/')
+
+# Ensure we append the correct path if it's missing
+if not LLM_URL.endswith('/v1/chat/completions'):
+    TEXT_AI_URL = f"{LLM_URL}/v1/chat/completions"
+else:
+    TEXT_AI_URL = LLM_URL
+
+MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
+
 if not API_ID or not API_HASH:
     print("ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set in .env or environment")
     sys.exit(1)
-SESSION_NAME = args.session
+
+SESSION_NAME = os.path.join(DATA_DIR, args.session)
+
+# Consolidated path for the AI disclosure tracking
+DISCLOSURE_FILE = os.path.join(DATA_DIR, "ai_disclosure_shown.json")
+SHUTDOWN_FILE = os.path.join(DATA_DIR, "shutdown_timestamp.txt")
 
 # ============================================================================
 # LOGGING SETUP - Centralized Multi-Service Logging
 # ============================================================================
 
-LOG_DIR = args.log_dir
+LOG_DIR = os.path.join(DATA_DIR, args.log_dir)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 def setup_logger(name: str, log_file: str, level=logging.INFO, max_bytes=5*1024*1024, backup_count=3):
@@ -363,10 +387,10 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Set in .env for admin co
 ALERT_COOLDOWN_SECONDS = 300  # Don't spam alerts more than once per 5 minutes per issue
 
 # Endpoints
-TEXT_AI_ENDPOINT = f"http://127.0.0.1:{args.text_port}/v1/chat/completions"
-IMAGE_AI_ENDPOINT = f"http://localhost:{args.image_port}"
-TTS_ENDPOINT = f"http://127.0.0.1:{args.tts_port}"
-COMFYUI_URL = "http://127.0.0.1:8188"
+TEXT_AI_ENDPOINT = TEXT_AI_URL
+IMAGE_AI_ENDPOINT = IMG_URL
+TTS_ENDPOINT = TTS_URL
+COMFYUI_ENDPOINT = COMFYUI_URL
 
 # ComfyUI settings — FLUX.1 dev pipeline
 WORKFLOW_FILE = "workflow_flux.json"
@@ -657,12 +681,15 @@ VIDEO_RATE_LIMIT_RESPONSES = [
 _video_file_cache: Dict[str, object] = {}
 
 # Story bank (pre-written explicit Uber stories)
-STORIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heather_stories.yaml")
+STORIES_FILE = os.path.join(CONFIG_DIR, "heather_stories.yaml")
 _story_bank: list = []  # List of dicts: {'key': str, 'kinks': list, 'content': str}
 
 # Pre-generated image library (mirrors video system)
-IMAGE_LIBRARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images_db")
+IMAGE_LIBRARY_DIR = os.path.join(CONFIG_DIR, "images_db")
 IMAGE_LIBRARY_FILE = os.path.join(IMAGE_LIBRARY_DIR, "library.json")
+# Ensure the image library directory exists
+os.makedirs(IMAGE_LIBRARY_DIR, exist_ok=True)
+
 image_library: list = []                             # All image metadata entries
 images_sent_to_user: Dict[int, Dict[str, set]] = {}  # chat_id -> {category -> set of image IDs}
 _image_file_cache: Dict[str, object] = {}            # image_id -> Telegram file reference
@@ -5181,7 +5208,7 @@ def check_ollama_status() -> tuple[bool, str]:
 
 def check_comfyui_status() -> tuple[bool, str]:
     try:
-        response = requests.get(f"{COMFYUI_URL}/system_stats", timeout=5)
+        response = requests.get(f"{COMFYUI_ENDPOINT}/system_stats", timeout=5)
         if response.status_code == 200:
             return True, "Online"
         return False, f"HTTP {response.status_code}"
@@ -5993,7 +6020,7 @@ COMFYUI_WORKFLOW = load_comfyui_workflow(WORKFLOW_FILE)
 def queue_comfyui_prompt(workflow: dict) -> str:
     data = json.dumps({"prompt": workflow}).encode('utf-8')
     req = urllib.request.Request(
-        f"{COMFYUI_URL}/prompt",
+        f"{COMFYUI_ENDPOINT}/prompt",
         data=data,
         headers={'Content-Type': 'application/json'}
     )
@@ -6003,7 +6030,7 @@ def queue_comfyui_prompt(workflow: dict) -> str:
 
 def get_comfyui_history(prompt_id: str) -> dict:
     try:
-        req = urllib.request.Request(f"{COMFYUI_URL}/history/{prompt_id}")
+        req = urllib.request.Request(f"{COMFYUI_ENDPOINT}/history/{prompt_id}")
         with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode('utf-8'))
     except Exception:
@@ -6016,7 +6043,7 @@ def get_comfyui_image(filename: str, subfolder: str = "", folder_type: str = "ou
             "subfolder": subfolder,
             "type": folder_type
         })
-        req = urllib.request.Request(f"{COMFYUI_URL}/view?{params}")
+        req = urllib.request.Request(f"{COMFYUI_ENDPOINT}/view?{params}")
         with urllib.request.urlopen(req, timeout=30) as response:
             return response.read()
     except Exception as e:
@@ -6283,7 +6310,8 @@ def generate_tts_audio(text: str) -> Optional[bytes]:
 # ============================================================================
 
 # Create the Telethon client
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+session_path = os.path.join('data', 'heather_session')
+client = TelegramClient(session_path, api_id, api_hash)
 
 # ============================================================================
 # TELETHON EVENT HANDLERS
