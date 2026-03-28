@@ -64,6 +64,9 @@ try:
 except ImportError:
     pass
 
+# Set Hugging Face cache to the persistent data directory
+os.environ["HF_HOME"] = os.path.join(DATA_DIR, "huggingface")
+
 DATA_DIR = "/app/data"
 CONFIG_DIR = "/app/config"
 # Ensure the directory exists
