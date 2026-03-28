@@ -95,11 +95,7 @@ TTS_URL = os.getenv("TTS_URL", f"http://127.0.0.1:{args.tts_port}").rstrip('/')
 IMG_URL = os.getenv("IMG_URL", f"http://127.0.0.1:{args.image_port}").rstrip('/')
 COMFYUI_URL = os.getenv("COMFYUI_URL", f"http://127.0.0.1:{args.comfyui_port}").rstrip('/')
 
-# Ensure we append the correct path if it's missing
-if not LLM_URL.endswith('/v1/chat/completions'):
-    TEXT_AI_URL = f"{LLM_URL}/v1/chat/completions"
-else:
-    TEXT_AI_URL = LLM_URL
+TEXT_AI_ENDPOINT = f"{LLM_URL}/v1/chat/completions"
 
 MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
 
@@ -5178,20 +5174,26 @@ async def verify_services_at_startup() -> dict:
 # ============================================================================
 
 def check_text_ai_status() -> tuple[bool, str]:
+    # Construct the status check endpoint from the base LLM_URL
+    status_url = f"{LLM_URL}/v1/models"
+    
     try:
-        response = requests.get(f"http://127.0.0.1:{args.text_port}/v1/models", timeout=5)
+        response = requests.get(status_url, timeout=5)
         if response.status_code == 200:
             data = response.json()
+            # Handle different API response formats (Ollama vs Generic OpenAI)
             models = data.get('data', [])
             if models:
                 model_name = models[0].get('id', 'unknown')
                 return True, f"Online ({model_name})"
             return True, "Online (no models)"
-        return False, f"HTTP {response.status_code}"
+        return False, f"HTTP {response.status_code} at {status_url}"
+    
     except requests.exceptions.ConnectionError:
-        return False, "Connection refused"
+        # Include the attempted URL in the return string for easier debugging
+        return False, f"OFFLINE (Attempted: {status_url})"
     except Exception as e:
-        return False, str(e)
+        return False, f"Error: {type(e).__name__} at {status_url}"
 
 def check_ollama_status() -> tuple[bool, str]:
     try:
