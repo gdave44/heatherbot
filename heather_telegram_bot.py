@@ -64,6 +64,12 @@ try:
 except ImportError:
     pass
 
+DATA_DIR = "/app/data"
+CONFIG_DIR = "/app/config"
+# Ensure the directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
 env_persona = os.getenv("HEATHER_PERSONA", "persona_example.yaml")
 
 # Parse command-line arguments
@@ -83,11 +89,7 @@ parser.add_argument('--small-model', action='store_true', help='Use optimized pr
 parser.add_argument('--session', type=str, default='heather_session', help='Telethon session file name')
 args = parser.parse_args()
 SMALL_MODEL_MODE = args.small_model
-DATA_DIR = "/app/data"
-CONFIG_DIR = "/app/config"
-# Ensure the directory exists
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(CONFIG_DIR, exist_ok=True)
+
 
 # ============================================================================
 # TELETHON CONFIGURATION (replaces TELEGRAM_TOKEN)
