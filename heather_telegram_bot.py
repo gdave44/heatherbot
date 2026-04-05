@@ -181,6 +181,20 @@ perf_logger = setup_logger('performance', 'performance.log')
 
 logger = main_logger
 
+# ============================================================================
+# BREADCRUMB LOGGING — enable with BREADCRUMB_LOGGING=1 in environment
+# Traces the full message pipeline: TELEGRAM_IN → LLM_REQUEST → LLM_RESPONSE → TELEGRAM_OUT
+# ============================================================================
+BREADCRUMB_LOGGING = os.getenv("BREADCRUMB_LOGGING", "0").strip() in ("1", "true", "yes", "on")
+breadcrumb_logger = setup_logger('breadcrumb', 'breadcrumb.log', logging.DEBUG)
+
+def _bc(tag: str, request_id: str, chat_id: int, **fields) -> None:
+    """Emit a breadcrumb log line — no-op when BREADCRUMB_LOGGING is disabled."""
+    if not BREADCRUMB_LOGGING:
+        return
+    field_str = " | ".join(f"{k}={v!r}" for k, v in fields.items())
+    breadcrumb_logger.info(f"[{tag}] req={request_id} chat={chat_id}" + (f" | {field_str}" if field_str else ""))
+
 def log_telegram_connection_ok(me):
     main_logger.info(
         f"[TELEGRAM] Connected successfully | "
@@ -5652,6 +5666,10 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             main_logger.info(
                 f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
             )
+            _bc('LLM_REQUEST', request_id, chat_id,
+                endpoint=TEXT_AI_ENDPOINT, model='local-model',
+                max_tokens=max_tokens, temp=round(temperature, 3),
+                retry=retry_count, msg=user_message[:80])
             response = requests.post(
                 TEXT_AI_ENDPOINT,
                 json={
@@ -5689,6 +5707,10 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
 
             # Check finish_reason — most reliable truncation signal
             finish_reason = response_data['choices'][0].get('finish_reason', 'stop')
+            _bc('LLM_RESPONSE', request_id, chat_id,
+                status=response.status_code, finish=finish_reason,
+                tokens=response_data.get('usage', {}).get('completion_tokens', '?'),
+                resp=ai_response[:120])
             if finish_reason == 'length':
                 main_logger.warning(f"Truncated by token limit (max_tokens={max_tokens}, attempt {retry_count+1}/3)")
                 if retry_count < 2:
@@ -6033,6 +6055,9 @@ React in 1-2 SHORT sentences like a text message:
             main_logger.info(
                 f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
             )
+            _bc('LLM_REQUEST', request_id, chat_id,
+                endpoint=TEXT_AI_ENDPOINT, model='local-model',
+                max_tokens=100, temp=0.75, type='image_rating')
             response = requests.post(    
                 TEXT_AI_ENDPOINT,
                 json={
@@ -6049,6 +6074,10 @@ React in 1-2 SHORT sentences like a text message:
             response_data = response.json()
             rating = response_data['choices'][0]['message']['content'].strip()
             rating = postprocess_response(rating)
+            _bc('LLM_RESPONSE', request_id, chat_id,
+                status=response.status_code, type='image_rating',
+                tokens=response_data.get('usage', {}).get('completion_tokens', '?'),
+                resp=rating[:120])
             
             if contains_character_violation(rating):
                 return None
@@ -6416,9 +6445,22 @@ async def handle_start(event):
 
 @client.on(events.NewMessage(incoming=True, pattern='/about'))
 async def handle_about(event):
+    chat_id = event.chat_id
+    user_message = event.raw_text or ""
+
+    request_id = f"{chat_id}-{int(time.time() * 1000)}"
+
+    _bc(
+        "TELEGRAM_IN",
+        request_id,
+        chat_id,
+        text=user_message[:100]
+    )
     """Handle /about command — show AI disclosure anytime"""
     chat_id = event.chat_id
+    _bc("TELEGRAM_OUT", request_id, chat_id, phase="sending")
     await event.respond(
+        _bc("TELEGRAM_OUT", request_id, chat_id, phase="sent")
         "ℹ️ **About Me**\n\n"
         "I'm Heather — an AI companion, creator-built and running locally. "
         "No cloud, no data sharing.\n\n"
@@ -7235,6 +7277,9 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
         main_logger.info(
             f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
         )
+        _bc('LLM_REQUEST', request_id, chat_id,
+            endpoint=TEXT_AI_ENDPOINT, model='local-model',
+            max_tokens=2048, temp=0.85, type='reengagement')
         response = requests.post(
             TEXT_AI_ENDPOINT,
             json={
@@ -7249,6 +7294,8 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
             msg = message_data.get('content', '').strip()
             if msg:
                 msg = strip_quote_wrapping(msg)
+                _bc('LLM_RESPONSE', request_id, chat_id,
+                    status=response.status_code, type='reengagement', resp=msg[:120])
                 return msg
     except Exception:
         pass
@@ -7695,6 +7742,7 @@ async def handle_photo(event):
         f"user={display_name!r} "
         f"text={user_message[:120]!r}"
     )
+    _bc('TELEGRAM_IN', request_id, chat_id, type='photo', msg=user_message[:120])
 
     # Check if user is blocked
     if is_blocked(chat_id):
@@ -7869,6 +7917,7 @@ async def handle_text_message(event):
     
     display_name = get_user_display_name(chat_id)
     main_logger.info(f"[{request_id}] Text from {display_name} ({chat_id}) ({mode}): {user_message[:100]}")
+    _bc('TELEGRAM_IN', request_id, chat_id, user=display_name, mode=mode, msg=user_message[:120])
     stats['messages_processed'] += 1
     store_message(chat_id, "User", user_message)
 
@@ -8579,6 +8628,9 @@ async def handle_text_message(event):
         # Record response for duplicate detection (use full original response)
         record_response_sent(chat_id, response)
         main_logger.info(f"[{request_id}] Reply to {chat_id} ({response_time:.1f}s): {response[:100]}")
+        _bc('TELEGRAM_OUT', request_id, chat_id,
+            parts=len(message_parts), elapsed_s=round(response_time, 2),
+            resp=response[:120])
 
         # Increment turn counter for proactive photo tracking
         conversation_turn_count[chat_id] = conversation_turn_count.get(chat_id, 0) + 1
@@ -9121,6 +9173,10 @@ async def main():
     ai_disclosure_shown = load_ai_disclosure_shown()
     main_logger.info(f"Loaded AI disclosure set: {len(ai_disclosure_shown)} users already disclosed")
 
+    _bc('TELEGRAM_IN', request_id, chat_id, text=user_message[:100])
+    _bc('TELEGRAM_OUT', request_id, chat_id, phase='sending')
+    _bc('TELEGRAM_OUT', request_id, chat_id, phase='sent')
+    
     # Load tip history
     raw_tips = load_tip_history()
     started = raw_tips.pop('_started_users', [])
