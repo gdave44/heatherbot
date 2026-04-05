@@ -1026,6 +1026,7 @@ def generate_personal_checkin(chat_id: int) -> Optional[str]:
             "'how'd that thing at work go?'\n\n"
             f"His recent messages:\n{context}\n\nYour check-in:"
         )
+        request_id = f"checkin-{chat_id}-{int(time.time() * 1000)}"
         main_logger.info(
             f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
         )
@@ -9438,6 +9439,7 @@ async def main():
         ]
 
         timeouts = [25, 35, 45]  # Escalating timeouts — must total < 120s asyncio cap
+        request_id = f"reengage-{candidate['chat_id']}-{int(time.time() * 1000)}"
         for attempt, timeout in enumerate(timeouts):
             try:
                 main_logger.info(
