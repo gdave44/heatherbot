@@ -181,6 +181,14 @@ perf_logger = setup_logger('performance', 'performance.log')
 
 logger = main_logger
 
+def log_telegram_connection_ok(me):
+    main_logger.info(
+        f"[TELEGRAM] Connected successfully | "
+        f"user_id={me.id} | "
+        f"username={getattr(me, 'username', None)} | "
+        f"session={SESSION_NAME}"
+    )
+
 def log_error(service: str, error: str, context: dict = None):
     """Log error to both service log and consolidated error log"""
     error_msg = f"[{service}] {error}"
@@ -1015,6 +1023,9 @@ def generate_personal_checkin(chat_id: int) -> Optional[str]:
             "'so did your meeting go ok?', 'still thinking about that road trip you mentioned', "
             "'how'd that thing at work go?'\n\n"
             f"His recent messages:\n{context}\n\nYour check-in:"
+        )
+        main_logger.info(
+            f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
         )
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -5635,6 +5646,9 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             temperature = min(temperature + 0.05, 0.95)
 
         with PerformanceTimer('TEXT_AI', 'generate', f"chat_id={chat_id} retry={retry_count}") as timer:
+            main_logger.info(
+                f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+            )
             response = requests.post(
                 TEXT_AI_ENDPOINT,
                 json={
@@ -6014,6 +6028,9 @@ React in 1-2 SHORT sentences like a text message:
         
         with PerformanceTimer('TEXT_AI', 'image_rating', f"chat_id={chat_id}"):
             response = requests.post(
+                main_logger.info(
+                    f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+                )
                 TEXT_AI_ENDPOINT,
                 json={
                     "model": "local-model",
@@ -7213,6 +7230,9 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
     ]
     try:
         response = requests.post(
+            main_logger.info(
+                f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+            )
             TEXT_AI_ENDPOINT,
             json={
                 "model": "local-model", "messages": prompt_messages,
@@ -7665,6 +7685,13 @@ async def handle_photo(event):
     """Handle photo messages"""
     chat_id = event.chat_id
     request_id = f"photo_{chat_id}_{int(time.time()*1000)}"
+
+    main_logger.info(
+        f"[{request_id}] [TELEGRAM_IN] "
+        f"chat_id={chat_id} "
+        f"user={display_name!r} "
+        f"text={user_message[:120]!r}"
+    )
 
     # Check if user is blocked
     if is_blocked(chat_id):
@@ -9411,6 +9438,9 @@ async def main():
         timeouts = [25, 35, 45]  # Escalating timeouts — must total < 120s asyncio cap
         for attempt, timeout in enumerate(timeouts):
             try:
+                main_logger.info(
+                    f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+                )
                 response = requests.post(
                     TEXT_AI_ENDPOINT,
                     json={
@@ -9786,6 +9816,10 @@ async def main():
             if not client.is_connected():
                 main_logger.info("Connecting to Telegram...")
                 await client.start()
+                me = await client.get_me()
+                log_telegram_connection_ok(me)
+                main_logger.info("[TELEGRAM] Client is ready and listening")
+                await client.run_until_disconnected()
                 connection_state['connected'] = True
                 connection_state['reconnect_attempts'] = 0
                 reconnect_delay = INITIAL_RECONNECT_DELAY  # Reset delay on success
