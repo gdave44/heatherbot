@@ -210,6 +210,17 @@ class PerformanceTimer:
         log_performance(self.service, self.operation, duration_ms, self.success, self.details)
         return False
 
+def log_startup_urls():
+    logger.info("=== SERVICE URL CONFIGURATION ===")
+    logger.info(f"LLM_URL: {LLM_URL}")
+    logger.info(f"TEXT_AI_ENDPOINT: {TEXT_AI_ENDPOINT}")
+    logger.info(f"TTS_URL: {TTS_URL}")
+    logger.info(f"IMG_URL: {IMG_URL}")
+    logger.info(f"COMFYUI_URL: {COMFYUI_URL}")
+    logger.info("================================")
+
+log_startup_urls()
+                 
 # ============================================================================
 # PERSONALITY LOADER - Load character from YAML
 # ============================================================================
