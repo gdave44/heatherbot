@@ -6027,10 +6027,10 @@ React in 1-2 SHORT sentences like a text message:
         ]
         
         with PerformanceTimer('TEXT_AI', 'image_rating', f"chat_id={chat_id}"):
-            response = requests.post(
-                main_logger.info(
-                    f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
-                )
+            main_logger.info(
+                f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+            )
+            response = requests.post(    
                 TEXT_AI_ENDPOINT,
                 json={
                     "model": "local-model",
@@ -7229,10 +7229,10 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
         {"role": "user", "content": f"Write a casual re-engagement text to {display_name}."}
     ]
     try:
+        main_logger.info(
+            f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+        )
         response = requests.post(
-            main_logger.info(
-                f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
-            )
             TEXT_AI_ENDPOINT,
             json={
                 "model": "local-model", "messages": prompt_messages,
