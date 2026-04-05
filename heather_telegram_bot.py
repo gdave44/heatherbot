@@ -186,6 +186,8 @@ def log_telegram_connection_ok(me):
         f"[TELEGRAM] Connected successfully | "
         f"user_id={me.id} | "
         f"username={getattr(me, 'username', None)} | "
+        f"phone={getattr(me, 'phone', 'hidden')} | "
+        f"bot={me.bot} | "
         f"session={SESSION_NAME}"
     )
 
@@ -9816,15 +9818,27 @@ async def main():
             if not client.is_connected():
                 main_logger.info("Connecting to Telegram...")
                 await client.start()
+                main_logger.info(
+                    f"[TELEGRAM] MTProto session established | "
+                    f"dc={client.session.dc_id} | "
+                    f"server={client.session.server_address}:{client.session.port}"
+                )
                 me = await client.get_me()
                 log_telegram_connection_ok(me)
                 main_logger.info("[TELEGRAM] Client is ready and listening")
-                await client.run_until_disconnected()
+                # State updated before blocking call so it reflects actual connection
                 connection_state['connected'] = True
                 connection_state['reconnect_attempts'] = 0
                 reconnect_delay = INITIAL_RECONNECT_DELAY  # Reset delay on success
+                await client.run_until_disconnected()
 
             me = await client.get_me()
+            main_logger.info(
+                f"[TELEGRAM] Already connected | "
+                f"user_id={me.id} | "
+                f"username={getattr(me, 'username', None)} | "
+                f"session={SESSION_NAME}"
+            )
             main_logger.info(f"Logged in as: {me.first_name} (@{me.username})")
 
             # Set Telegram bio to AI disclosure
