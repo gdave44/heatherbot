@@ -98,11 +98,26 @@ SMALL_MODEL_MODE = args.small_model
 # ============================================================================
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-LLM_URL = os.getenv("LLM_URL", f"http://127.0.0.1:{args.text_port}").rstrip('/')
-TTS_URL = os.getenv("TTS_URL", f"http://127.0.0.1:{args.tts_port}").rstrip('/')
-IMG_URL = os.getenv("IMG_URL", f"http://127.0.0.1:{args.image_port}").rstrip('/')
-COMFYUI_URL = os.getenv("COMFYUI_URL", f"http://127.0.0.1:{args.comfyui_port}").rstrip('/')
+def extract_host(base_url: str, default: str):
+    try:
+        parsed = urllib.parse.urlparse(base_url)
+        if parsed.scheme and parsed.hostname:
+            return f"{parsed.scheme}://{parsed.hostname}"
+    except Exception:
+        pass
+    return default
+def build_service_url(env_var, fallback_port):
+    val = os.getenv(env_var)
+    if val:
+        return val.rstrip('/')
+    return f"{base_host}:{fallback_port}"
 
+LLM_URL = os.getenv("LLM_URL", f"http://127.0.0.1:{args.text_port}").rstrip('/')
+base_host = extract_host(LLM_URL, "http://127.0.0.1")
+
+TTS_URL = build_service_url("TTS_URL", args.tts_port)
+IMG_URL = build_service_url("IMG_URL", args.image_port)
+COMFYUI_URL = build_service_url("COMFYUI_URL", args.comfyui_port)
 TEXT_AI_ENDPOINT = f"{LLM_URL}/v1/chat/completions"
 
 MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
