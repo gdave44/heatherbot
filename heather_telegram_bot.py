@@ -8401,16 +8401,32 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 if MONITORING_ENABLED:
     monitor_app = Flask(__name__)
 
-    MONITOR_AUTH_TOKEN = os.getenv("MONITOR_AUTH_TOKEN", os.getenv("HEATHER_DASHBOARD_KEY", ""))
+    import ipaddress as _ipaddress
+    _raw_allowed_ips = os.getenv("MONITOR_ALLOWED_IPS", "127.0.0.1,::1")
+    MONITOR_ALLOWED_NETS = []
+    for _entry in _raw_allowed_ips.split(","):
+        _entry = _entry.strip()
+        if not _entry:
+            continue
+        try:
+            MONITOR_ALLOWED_NETS.append(_ipaddress.ip_network(_entry, strict=False))
+        except ValueError:
+            main_logger.warning(f"[MONITOR] Invalid IP/CIDR in MONITOR_ALLOWED_IPS: {_entry!r}")
+
+    def _ip_allowed(addr: str) -> bool:
+        try:
+            ip = _ipaddress.ip_address(addr)
+            return any(ip in net for net in MONITOR_ALLOWED_NETS)
+        except ValueError:
+            return False
 
     @monitor_app.before_request
     def check_dashboard_auth():
         if flask_request.path == '/health':
             return None  # /health stays public for monitoring scripts
-        if not MONITOR_AUTH_TOKEN:
-            return None  # No token configured = open access
-        token = flask_request.args.get('token') or flask_request.headers.get('X-Auth-Token', '')
-        if token != MONITOR_AUTH_TOKEN:
+        client_ip = flask_request.headers.get('X-Forwarded-For', flask_request.remote_addr)
+        client_ip = client_ip.split(',')[0].strip()  # Take first IP if behind proxy
+        if not _ip_allowed(client_ip):
             return "Unauthorized", 401
 
     @monitor_app.route('/')
