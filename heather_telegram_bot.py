@@ -8308,10 +8308,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Record response for duplicate detection (use full original response)
         record_response_sent(chat_id, response)
-        main_logger.info(f"[{request_id}] Reply to {chat_id} ({response_time:.1f}s): {response[:100]}")
-        _bc('TELEGRAM_OUT', request_id, chat_id,
-            parts=len(message_parts), elapsed_s=round(response_time, 2),
-            resp=response[:120])
+        if BREADCRUMB_LOGGING:
+            main_logger.info(f"[{request_id}] Reply to {chat_id} ({response_time:.1f}s): {response[:100]}")
+            _bc('TELEGRAM_OUT', request_id, chat_id,
+                parts=len(message_parts), elapsed_s=round(response_time, 2),
+                resp=response[:120])
 
         # Increment turn counter for proactive photo tracking
         conversation_turn_count[chat_id] = conversation_turn_count.get(chat_id, 0) + 1
