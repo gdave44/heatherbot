@@ -68,9 +68,11 @@ except ImportError:
 
 DATA_DIR = "/app/data"
 CONFIG_DIR = "/app/config"
-# Ensure the directory exists
+CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
+# Ensure directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 
 # Set Hugging Face cache to the persistent data directory
 os.environ["HF_HOME"] = os.path.join(DATA_DIR, "huggingface")
@@ -4334,6 +4336,33 @@ def store_message(chat_id: int, sender: str, content: str):
     elif "Heather" in sender:
         conversation_activity[chat_id]['last_heather'] = now
 
+def save_conversation(chat_id: int):
+    """Persist a user's conversation deque to disk (atomic write)."""
+    convo = conversations.get(chat_id)
+    if not convo:
+        return
+    path = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(list(convo), f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        main_logger.debug(f"[CONV] Failed to save conversation for {chat_id}: {e}")
+
+def load_conversation(chat_id: int):
+    """Load a user's conversation history from disk into the in-memory deque."""
+    path = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            msgs = json.load(f)
+        conversations[chat_id] = deque(msgs[-MAX_CONVERSATION_LENGTH:], maxlen=None)
+        main_logger.debug(f"[CONV] Loaded {len(conversations[chat_id])} messages for {chat_id}")
+    except Exception as e:
+        main_logger.warning(f"[CONV] Failed to load conversation for {chat_id}: {e}")
+
 def capture_user_info_from_update(update: Update):
     """Capture user info from python-telegram-bot Update"""
     from_user = update.effective_user
@@ -5186,6 +5215,8 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
         mode = get_user_mode(chat_id)
 
         if chat_id not in conversations:
+            load_conversation(chat_id)
+        if chat_id not in conversations:
             conversations[chat_id] = deque()
 
         if SMALL_MODEL_MODE:
@@ -5723,6 +5754,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
 
             while len(conversations[chat_id]) > MAX_CONVERSATION_LENGTH:
                 conversations[chat_id].popleft()
+            save_conversation(chat_id)
 
             return ai_response
         else:
@@ -7554,6 +7586,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conversations[chat_id].append({"role": "assistant", "content": final_response})
         while len(conversations[chat_id]) > MAX_CONVERSATION_LENGTH:
             conversations[chat_id].popleft()
+        save_conversation(chat_id)
 
         async with lock:
             photo_processing.pop(chat_id, None)
