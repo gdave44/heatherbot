@@ -6409,6 +6409,24 @@ async def handle_heather_mode(update: Update, context: ContextTypes.DEFAULT_TYPE
     main_logger.info(f"User {chat_id} switched to heather mode")
     store_message(chat_id, "System", "Switched to heather mode")
 
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /menu command — quick feature overview in persona voice"""
+    chat_id = update.effective_chat.id
+    name = personality.name
+    await context.bot.send_message(
+        chat_id,
+        f"hey, here's what I can do 😊\n\n"
+        f"💬 just talk to me — I'm always here\n"
+        f"📸 ask for a pic — tell me what you want to see\n"
+        f"🎥 ask for a video — I'll send one if I've got it\n"
+        f"🍆 send me a photo — I'll tell you what I think\n"
+        f"🎤 /voice\\_on — get voice notes instead of texts\n"
+        f"🔄 /reset — start fresh\n\n"
+        f"or just say hi and we'll figure it out 💋",
+        parse_mode='Markdown'
+    )
+    store_message(chat_id, name, "Menu requested")
+
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -9366,6 +9384,7 @@ async def main():
     application.add_handler(CommandHandler("rate_mode", handle_rate_mode))
     application.add_handler(CommandHandler("chat_mode", handle_chat_mode))
     application.add_handler(CommandHandler("heather_mode", handle_heather_mode))
+    application.add_handler(CommandHandler("menu", handle_menu))
     application.add_handler(CommandHandler("help", handle_help))
     application.add_handler(CommandHandler("stories", handle_stories_command))
     application.add_handler(CommandHandler("selfie", handle_selfie))
