@@ -1046,7 +1046,7 @@ def generate_personal_checkin(chat_id: int) -> Optional[str]:
         response = requests.post(
             TEXT_AI_ENDPOINT,
             json={
-                "model": "local-model",
+                "model": MODEL_NAME,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.85,
                 "max_tokens": 60,
@@ -5542,7 +5542,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             response = requests.post(
                 TEXT_AI_ENDPOINT,
                 json={
-                    "model": "local-model",
+                    "model": MODEL_NAME,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
@@ -5930,7 +5930,7 @@ React in 1-2 SHORT sentences like a text message:
             response = requests.post(    
                 TEXT_AI_ENDPOINT,
                 json={
-                    "model": "local-model",
+                    "model": MODEL_NAME,
                     "messages": messages,
                     "temperature": 0.75,
                     "max_tokens": 100,  # Shorter responses
@@ -7035,7 +7035,7 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
         response = requests.post(
             TEXT_AI_ENDPOINT,
             json={
-                "model": "local-model", "messages": prompt_messages,
+                "model": MODEL_NAME, "messages": prompt_messages,
                 "temperature": 0.85, "max_tokens": 2048, "stream": False,
                 "top_p": 0.9, "frequency_penalty": 0.3, "presence_penalty": 0.3
             },
@@ -9145,7 +9145,7 @@ async def main():
                 response = requests.post(
                     TEXT_AI_ENDPOINT,
                     json={
-                        "model": "local-model",
+                        "model": MODEL_NAME,
                         "messages": prompt_messages,
                         "temperature": 0.85,
                         "max_tokens": 512,
