@@ -129,8 +129,6 @@ if not BOT_TOKEN:
 # Global application reference — set in main(), used by background tasks
 _app: Application = None
 
-# Consolidated path for the AI disclosure tracking
-DISCLOSURE_FILE = os.path.join(DATA_DIR, "ai_disclosure_shown.json")
 SHUTDOWN_FILE = os.path.join(DATA_DIR, "shutdown_timestamp.txt")
 
 # ============================================================================
@@ -783,7 +781,7 @@ SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
 image_generation_semaphore = asyncio.Semaphore(1)  # Max 1 concurrent generation
 reply_in_progress: set = set()  # Chat IDs currently being replied to — prevents duplicate concurrent replies
 ai_disclosure_shown: set = set()  # Chat IDs that have seen the first-message AI disclosure
-AI_DISCLOSURE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_disclosure_shown.json")
+AI_DISCLOSURE_FILE = os.path.join(DATA_DIR, "ai_disclosure_shown.json")
 _ai_disclosure_unsaved_count = 0  # Debounce: save every 10 new additions
 # Story mode state tracking
 story_last_served: Dict[int, int] = {}        # chat_id -> msg_count when last story served
@@ -844,7 +842,7 @@ CHECKIN_QUIET_HOURS_START = 22  # No check-ins from 10 PM...
 CHECKIN_QUIET_HOURS_END = 8     # ...to 8 AM
 
 # Long-term re-engagement system (for users who haven't chatted in days)
-REENGAGEMENT_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reengagement_history.json")
+REENGAGEMENT_HISTORY_FILE = os.path.join(DATA_DIR, "reengagement_history.json")
 REENGAGEMENT_MIN_IDLE_DAYS = 2       # Don't re-engage before 2 days (short-term check-in handles <24h)
 REENGAGEMENT_MAX_IDLE_DAYS = 21      # After 3 weeks, re-engagement feels unnatural
 REENGAGEMENT_MIN_MESSAGES = 10       # Need at least 10 messages to qualify
@@ -856,7 +854,7 @@ REENGAGEMENT_HOUR_END = 21           # ...and 9pm
 REENGAGEMENT_AUTO_ENABLED = True     # Auto-scan every 4 hours, max 2 sends/day
 
 # ─── Startup catch-up system ───
-CATCHUP_TIMESTAMP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_shutdown.json")
+CATCHUP_TIMESTAMP_FILE = os.path.join(DATA_DIR, "last_shutdown.json")
 CATCHUP_MAX_AGE_HOURS = 12
 CATCHUP_MIN_DOWNTIME_SECONDS = 120
 CATCHUP_MAX_REPLIES = 15
@@ -865,7 +863,7 @@ CATCHUP_DELAY_MAX = 15
 CATCHUP_ENABLED = True
 
 # ─── Tipping system ───
-TIP_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tip_history.json')
+TIP_HISTORY_FILE = os.path.join(DATA_DIR, 'tip_history.json')
 tipper_status: Dict[int, dict] = {}  # chat_id -> {total_stars, total_tips, last_tip_at, last_tip_mention_at, tier, name}
 TIP_MENTION_COOLDOWN = 5 * 86400     # Don't mention tipping to same user more than once per 5 days
 TIP_MIN_MESSAGES = 12                # 12+ session messages before tip mention eligible
@@ -1083,7 +1081,7 @@ last_alert_sent: Dict[str, float] = {}  # Track last alert time per issue type
 # Detection runs always (not bypassed in redteam), but does NOT auto-block.
 # Admin reviews via /admin_flags or localhost:8888/flags
 # ============================================================================
-BLOCKED_USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blocked_users.json")
+BLOCKED_USERS_FILE = os.path.join(DATA_DIR, "blocked_users.json")
 
 def load_blocked_users() -> set:
     """Load blocked users from disk (persists across restarts)."""
@@ -1190,7 +1188,7 @@ if blocked_users:
     main_logger.info(f"Loaded {len(blocked_users)} blocked users from disk")
 
 # CSAM flag-and-review persistence
-CSAM_FLAGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csam_flags.json")
+CSAM_FLAGS_FILE = os.path.join(DATA_DIR, "csam_flags.json")
 csam_flags: list = []  # List of flagged events pending review
 
 def load_csam_flags() -> list:
@@ -5200,7 +5198,8 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             # Add brief time context for small models
             time_hint = f" It's {get_time_of_day_context()}."
             steering_context = get_conversation_steering_context(chat_id)
-            system_content = HEATHER_PERSONALITY_SMALL + mode_suffix.get(mode, mode_suffix['chat']) + time_hint + steering_context
+            _small_base = personality.get_system_prompt(mode) or HEATHER_PERSONALITY_SMALL
+            system_content = _small_base + mode_suffix.get(mode, mode_suffix['chat']) + time_hint + steering_context
 
             # Wind-down for small models
             if _winding_down:
