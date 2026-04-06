@@ -450,12 +450,12 @@ TTS_ENDPOINT = TTS_URL
 COMFYUI_ENDPOINT = COMFYUI_URL
 
 # ComfyUI settings — FLUX.1 dev pipeline
-WORKFLOW_FILE = "workflow_flux.json"
+WORKFLOW_FILE = os.getenv("COMFYUI_WORKFLOW_FILE", os.path.join(CONFIG_DIR, "workflow_flux.json"))
 POSITIVE_PROMPT_NODE = "3"
 NEGATIVE_PROMPT_NODE = "4"
 FACE_IMAGE_NODE = "10"
 FINAL_OUTPUT_NODE = "9"  # Save FINAL (Face Swapped + Blended)
-HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", "heather_face.png")
+HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", os.path.join(CONFIG_DIR, "heather_face.png"))
 FLUX_GUIDANCE = 5.0
 EMMA_HIKING_PHOTO = "sfw/casual/518393309_24449331331317269_8182893831074081262_n.jpg"
 EMMA_HIKING_ID = "sfw_casual_068"
@@ -6059,6 +6059,14 @@ def load_comfyui_workflow(filepath: str) -> dict:
         return None
 
 COMFYUI_WORKFLOW = load_comfyui_workflow(WORKFLOW_FILE)
+if COMFYUI_WORKFLOW:
+    main_logger.info(f"[COMFYUI] Workflow loaded: {WORKFLOW_FILE}")
+else:
+    main_logger.warning(f"[COMFYUI] Workflow NOT found: {WORKFLOW_FILE}")
+if os.path.exists(HEATHER_FACE_IMAGE):
+    main_logger.info(f"[COMFYUI] Face image found: {HEATHER_FACE_IMAGE}")
+else:
+    main_logger.warning(f"[COMFYUI] Face image NOT found: {HEATHER_FACE_IMAGE}")
 
 def queue_comfyui_prompt(workflow: dict) -> str:
     data = json.dumps({"prompt": workflow}).encode('utf-8')
