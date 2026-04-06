@@ -19,4 +19,4 @@ RUN pip install --upgrade pip \
 
 VOLUME ["/app/data", "/app/config"]
 
-CMD ["python", "heather_telegram_bot.py", "--monitoring", "--small-model"]
+CMD ["python", "heather_telegram_bot.py", "--monitoring"]

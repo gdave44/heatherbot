@@ -6664,6 +6664,13 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_turn_count[chat_id] = 0
     user_escalation_level[chat_id] = 0
     session_state.pop(chat_id, None)  # Clear session state for fresh start
+    # Delete persisted conversation file so it doesn't reload on next restart
+    conv_file = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
+    try:
+        if os.path.exists(conv_file):
+            os.remove(conv_file)
+    except Exception as e:
+        main_logger.debug(f"[RESET] Could not delete conversation file for {chat_id}: {e}")
     await context.bot.send_message(chat_id, "Starting fresh! So what's up? 😊")
     main_logger.info(f"Conversation reset for {chat_id}")
     store_message(chat_id, "System", "Conversation reset")
@@ -6816,6 +6823,12 @@ async def handle_admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE)
     last_response_sent.pop(target_id, None)
     voice_mode_users.discard(target_id)
     manual_mode_chats.discard(target_id)
+    conv_file = os.path.join(CONVERSATIONS_DIR, f"{target_id}.json")
+    try:
+        if os.path.exists(conv_file):
+            os.remove(conv_file)
+    except Exception as e:
+        main_logger.debug(f"[ADMIN_RESET] Could not delete conversation file for {target_id}: {e}")
 
     await context.bot.send_message(chat_id, f"✅ Reset all state for user {target_id}")
     main_logger.info(f"Admin reset state for user {target_id}")
