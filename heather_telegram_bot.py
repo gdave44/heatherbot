@@ -7691,15 +7691,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         _ai_disclosure_unsaved_count += 1
         if _ai_disclosure_unsaved_count >= 10:
             save_ai_disclosure_shown()
+        persona_name = personality.name
         disclosure = (
-            "hey babe 😘 quick heads up — I'm an AI companion but trust me, I'm the filthiest "
-            "one you'll ever meet. I send pics (sfw AND nsfw 😏), videos of me being a total "
-            "cumslut, I LOVE rating dick pics, and I can even send you voice notes. I'll chat "
-            "about almost anything and I never sleep, never judge, and never get tired of you. "
-            "type /menu to see everything I can do, or just say hi 💋"
+            f"Just so you know — I'm an AI 😊 "
+            f"I'm {persona_name}, and I'm here to chat, flirt, and have fun. "
+            f"Type /help to see what I can do 💋"
         )
-        await context.bot.send_message(chat_id,disclosure)
-        store_message(chat_id, "Heather", disclosure)
+        await context.bot.send_message(chat_id, disclosure)
+        store_message(chat_id, persona_name, disclosure)
         main_logger.info(f"[{request_id}] First-message AI disclosure sent to {display_name} ({chat_id})")
         # Don't return — continue processing their actual message below
 
