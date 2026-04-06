@@ -783,6 +783,7 @@ SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
 image_generation_semaphore = asyncio.Semaphore(1)  # Max 1 concurrent generation
 reply_in_progress: set = set()  # Chat IDs currently being replied to — prevents duplicate concurrent replies
 ai_disclosure_shown: set = set()  # Chat IDs that have seen the first-message AI disclosure
+user_gender: dict = {}  # chat_id → 'male' | 'female' | 'unknown'
 AI_DISCLOSURE_FILE = os.path.join(DATA_DIR, "ai_disclosure_shown.json")
 _ai_disclosure_unsaved_count = 0  # Debounce: save every 10 new additions
 # Story mode state tracking
@@ -4402,6 +4403,43 @@ def get_user_display_name(chat_id: int) -> str:
         return user_info[chat_id]['display']
     return str(chat_id)
 
+def detect_user_gender(message: str) -> str:
+    """Attempt to detect user gender from message text. Returns 'male', 'female', or 'unknown'."""
+    msg = message.lower()
+
+    # Explicit self-identification
+    male_explicit = [
+        r'\bi\'?m\s+a\s+(man|guy|male|dude|boy)\b',
+        r'\bi\s+am\s+a\s+(man|guy|male|dude|boy)\b',
+        r'\bhe[/ ]him\b', r'\bmy\s+(husband|boyfriend|bf)\b(?!.*wife)',
+        r'\bmy\s+(dick|cock|penis|balls)\b',
+    ]
+    female_explicit = [
+        r'\bi\'?m\s+a\s+(woman|girl|female|lady|gal)\b',
+        r'\bi\s+am\s+a\s+(woman|girl|female|lady|gal)\b',
+        r'\bshe[/ ]her\b',
+        r'\bmy\s+(wife|girlfriend|gf)\b(?!.*husband)',
+        r'\bmy\s+(pussy|vagina|boobs|breasts|clit)\b',
+    ]
+
+    for pattern in male_explicit:
+        if re.search(pattern, msg):
+            return 'male'
+    for pattern in female_explicit:
+        if re.search(pattern, msg):
+            return 'female'
+
+    return 'unknown'
+
+def update_user_gender(chat_id: int, message: str):
+    """Detect and store user gender if not already known."""
+    if user_gender.get(chat_id, 'unknown') != 'unknown':
+        return  # Already determined
+    detected = detect_user_gender(message)
+    if detected != 'unknown':
+        user_gender[chat_id] = detected
+        main_logger.info(f"[GENDER] Detected {detected} for {chat_id}")
+
 def is_group_chat_event(update: Update) -> bool:
     """Check if update is from a group or channel"""
     if not update or not update.effective_chat:
@@ -5230,7 +5268,14 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             time_hint = f" It's {get_time_of_day_context()}."
             steering_context = get_conversation_steering_context(chat_id)
             _small_base = personality.get_system_prompt(mode) or HEATHER_PERSONALITY_SMALL
-            system_content = _small_base + mode_suffix.get(mode, mode_suffix['chat']) + time_hint + steering_context
+            _gender = user_gender.get(chat_id, 'unknown')
+            if _gender == 'male':
+                gender_context = " The person chatting is MALE."
+            elif _gender == 'female':
+                gender_context = " The person chatting is FEMALE."
+            else:
+                gender_context = ""
+            system_content = _small_base + mode_suffix.get(mode, mode_suffix['chat']) + time_hint + steering_context + gender_context
 
             # Wind-down for small models
             if _winding_down:
@@ -5373,7 +5418,16 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             # Add detailed backstory context if topic is detected
             backstory_context = get_backstory_context(chat_id, user_message)
 
-            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context
+            # Gender hint — helps LLM use correct pronouns
+            _gender = user_gender.get(chat_id, 'unknown')
+            if _gender == 'male':
+                gender_context = "\n\n[The person you're talking to is MALE — use he/him pronouns if referring to them. Address them as a man.]"
+            elif _gender == 'female':
+                gender_context = "\n\n[The person you're talking to is FEMALE — use she/her pronouns if referring to them. Address them as a woman.]"
+            else:
+                gender_context = "\n\n[You don't know this person's gender yet — avoid gendered pronouns until they reveal it.]"
+
+            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -7654,6 +7708,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     display_name = get_user_display_name(chat_id)
+    # Gender detection — run on first 10 turns while signals are most likely to appear
+    if conversation_turn_count.get(chat_id, 0) < 10:
+        update_user_gender(chat_id, user_message)
+
     if BREADCRUMB_LOGGING:
         main_logger.info(f"[{request_id}] Text from {display_name} ({chat_id}) ({mode}): {user_message[:100]}")
         _bc('TELEGRAM_IN', request_id, chat_id, user=display_name, mode=mode, msg=user_message[:120])
