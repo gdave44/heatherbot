@@ -7623,8 +7623,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     display_name = get_user_display_name(chat_id)
-    main_logger.info(f"[{request_id}] Text from {display_name} ({chat_id}) ({mode}): {user_message[:100]}")
-    _bc('TELEGRAM_IN', request_id, chat_id, user=display_name, mode=mode, msg=user_message[:120])
+    if BREADCRUMB_LOGGING:
+        main_logger.info(f"[{request_id}] Text from {display_name} ({chat_id}) ({mode}): {user_message[:100]}")
+        _bc('TELEGRAM_IN', request_id, chat_id, user=display_name, mode=mode, msg=user_message[:120])
     stats['messages_processed'] += 1
     store_message(chat_id, "User", user_message)
 
