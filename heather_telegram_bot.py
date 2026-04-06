@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Heather Telegram Bot v3.6 - USERBOT Edition (Telethon)
-=======================================================
-Converted from Bot API (telebot) to MTProto (Telethon) userbot.
-Now appears as a real Telegram user, not a bot!
+Heather Telegram Bot v4.0 - Bot API Edition (python-telegram-bot)
+=================================================================
+Migrated from Telethon (MTProto userbot) to python-telegram-bot (Bot API).
+Uses standard bot token from BotFather.
 
-Key differences from v2.8:
-- Uses Telethon instead of pyTelegramBotAPI
-- Logs in as a real user account (no "bot" label)
-- All handlers are now async
-- Session-based authentication (no bot token)
+Key differences from v3.6:
+- Uses python-telegram-bot instead of Telethon
+- Authenticates with TELEGRAM_BOT_TOKEN (from BotFather)
+- Standard bot account (visible as a bot)
+- All handlers use (update, context) signature
 
 Usage:
-    python heather_telegram_userbot.py --monitoring
+    python heather_telegram_bot.py --monitoring
 
-First run will prompt for phone number and verification code.
-Subsequent runs use saved session file.
+Set TELEGRAM_BOT_TOKEN in .env before running.
 """
 import argparse
 import logging
@@ -43,10 +42,13 @@ from flask import Flask, jsonify, render_template_string, request as flask_reque
 import sys
 
 # ============================================================================
-# TELETHON IMPORTS (replaces telebot)
+# TELEGRAM BOT API IMPORTS
 # ============================================================================
-from telethon import TelegramClient, events
-from telethon.errors import FileReferenceExpiredError
+from telegram import Update, Bot
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    filters, ContextTypes, CallbackQueryHandler
+)
 import io
 from PIL import Image
 from postprocess import (
@@ -88,16 +90,14 @@ parser.add_argument('--personality', type=str,
                     default=os.path.join(CONFIG_DIR, env_persona),
                     help='Personality YAML file path')
 parser.add_argument('--small-model', action='store_true', help='Use optimized prompt for 12B models')
-parser.add_argument('--session', type=str, default='heather_session', help='Telethon session file name')
 args = parser.parse_args()
 SMALL_MODEL_MODE = args.small_model
 
 
 # ============================================================================
-# TELETHON CONFIGURATION (replaces TELEGRAM_TOKEN)
+# BOT API CONFIGURATION
 # ============================================================================
-API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
-API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 def extract_host(base_url: str, default: str):
     try:
         parsed = urllib.parse.urlparse(base_url)
@@ -122,11 +122,12 @@ TEXT_AI_ENDPOINT = f"{LLM_URL}/v1/chat/completions"
 
 MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
 
-if not API_ID or not API_HASH:
-    print("ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set in .env or environment")
+if not BOT_TOKEN:
+    print("ERROR: TELEGRAM_BOT_TOKEN must be set in .env or environment")
     sys.exit(1)
 
-SESSION_NAME = os.path.join(DATA_DIR, args.session)
+# Global application reference — set in main(), used by background tasks
+_app: Application = None
 
 # Consolidated path for the AI disclosure tracking
 DISCLOSURE_FILE = os.path.join(DATA_DIR, "ai_disclosure_shown.json")
@@ -198,11 +199,9 @@ def _bc(tag: str, request_id: str, chat_id: int, **fields) -> None:
 def log_telegram_connection_ok(me):
     main_logger.info(
         f"[TELEGRAM] Connected successfully | "
-        f"user_id={me.id} | "
-        f"username={getattr(me, 'username', None)} | "
-        f"phone={getattr(me, 'phone', 'hidden')} | "
-        f"bot={me.bot} | "
-        f"session={SESSION_NAME}"
+        f"bot_id={me.id} | "
+        f"username=@{me.username} | "
+        f"name={me.first_name}"
     )
 
 def log_error(service: str, error: str, context: dict = None):
@@ -1167,9 +1166,9 @@ async def csam_flag(event, chat_id: int, user_message: str, display_name: str) -
     )
 
     # Alert admin (informational — not an auto-block)
-    if ADMIN_USER_ID > 0 and chat_id != ADMIN_USER_ID:
+    if ADMIN_USER_ID > 0 and chat_id != ADMIN_USER_ID and _app:
         try:
-            await client.send_message(
+            await _app.bot.send_message(
                 ADMIN_USER_ID,
                 f"**[CSAM FLAG #{flag_entry['id']}]**\n"
                 f"User: {display_name} ({chat_id})\n"
@@ -2272,7 +2271,7 @@ TIP_HOOK_MESSAGES = [
 ]
 
 
-async def maybe_send_tip_hook(event, chat_id: int) -> bool:
+async def maybe_send_tip_hook(bot: Bot, chat_id: int) -> bool:
     """Check if tip hook should fire — sends a simple, transparent one-liner.
     No Emma photos, no emotional leverage. Once per session, after 15+ messages.
     Returns True if hook was sent."""
@@ -2298,13 +2297,10 @@ async def maybe_send_tip_hook(event, chat_id: int) -> bool:
     try:
         # Natural delay before the casual mention
         await asyncio.sleep(random.uniform(4.0, 8.0))
-        try:
-            async with client.action(event.input_chat, 'typing'):
-                await asyncio.sleep(random.uniform(1.0, 2.0))
-        except Exception:
-            await asyncio.sleep(random.uniform(1.0, 2.0))
+        await bot.send_chat_action(chat_id, 'typing')
+        await asyncio.sleep(random.uniform(1.0, 2.0))
 
-        await event.respond(hook_text)
+        await bot.send_message(chat_id, hook_text)
         store_message(chat_id, "Heather", hook_text)
 
         # Inject into LLM context so it knows what it sent
@@ -3695,7 +3691,8 @@ async def send_admin_alert(message: str, issue_type: str = "general"):
         return False
 
     try:
-        await client.send_message(ADMIN_USER_ID, f"⚠️ **Bot Alert**\n\n{message}")
+        if _app:
+            await _app.bot.send_message(ADMIN_USER_ID, f"⚠️ **Bot Alert**\n\n{message}")
         record_alert_sent(issue_type)
         main_logger.info(f"Admin alert sent: {issue_type}")
         return True
@@ -4042,7 +4039,7 @@ def generate_tag_caption(image_entry: dict, chat_id: int) -> tuple:
     return caption, history_desc
 
 
-async def send_library_image(event, chat_id: int, category: str) -> bool:
+async def send_library_image(bot: Bot, chat_id: int, category: str) -> bool:
     """Send a pre-generated image from the library. Returns True if sent."""
     image_entry = get_library_image(chat_id, category)
     if not image_entry:
@@ -4058,21 +4055,13 @@ async def send_library_image(event, chat_id: int, category: str) -> bool:
 
     try:
         if image_id in _image_file_cache:
-            try:
-                await client.send_file(chat_id, _image_file_cache[image_id],
-                                       caption=caption, force_document=False)
-            except FileReferenceExpiredError:
-                main_logger.warning(f"[IMAGE_LIB] File reference expired for {image_id}, re-uploading")
-                del _image_file_cache[image_id]
-                result = await client.send_file(chat_id, image_path,
-                                                caption=caption, force_document=False)
-                if result and result.photo:
-                    _image_file_cache[image_id] = result.photo
+            # Re-use cached file_id (file_ids are permanent in Bot API)
+            result = await bot.send_photo(chat_id, _image_file_cache[image_id], caption=caption)
         else:
-            result = await client.send_file(chat_id, image_path,
-                                            caption=caption, force_document=False)
+            with open(image_path, 'rb') as f:
+                result = await bot.send_photo(chat_id, f, caption=caption)
             if result and result.photo:
-                _image_file_cache[image_id] = result.photo
+                _image_file_cache[image_id] = result.photo[-1].file_id
 
         record_image_sent(chat_id, image_id, category)
         record_photo_sent(chat_id)
@@ -4106,7 +4095,7 @@ def should_send_unsolicited_nsfw(chat_id: int) -> bool:
     return random.random() < UNSOLICITED_NSFW_CHANCE
 
 
-async def send_unsolicited_nsfw(event, chat_id: int) -> bool:
+async def send_unsolicited_nsfw(bot: Bot, chat_id: int) -> bool:
     """Send an unsolicited NSFW photo with a flirty lead-in message."""
     category = random.choice(UNSOLICITED_NSFW_CATEGORIES)
     image_entry = get_library_image(chat_id, category)
@@ -4123,27 +4112,18 @@ async def send_unsolicited_nsfw(event, chat_id: int) -> bool:
 
     try:
         # Send the lead-in text first
-        await event.respond(lead_in)
+        await bot.send_message(chat_id, lead_in)
         store_message(chat_id, "Heather", lead_in)
         await asyncio.sleep(random.uniform(2.0, 4.0))
 
         # Send the photo with tag-aware caption
         if image_id in _image_file_cache:
-            try:
-                await client.send_file(chat_id, _image_file_cache[image_id],
-                                       caption=caption, force_document=False)
-            except FileReferenceExpiredError:
-                main_logger.warning(f"[IMAGE_LIB] File reference expired for {image_id}, re-uploading")
-                del _image_file_cache[image_id]
-                result = await client.send_file(chat_id, image_path,
-                                                caption=caption, force_document=False)
-                if result and result.photo:
-                    _image_file_cache[image_id] = result.photo
+            result = await bot.send_photo(chat_id, _image_file_cache[image_id], caption=caption)
         else:
-            result = await client.send_file(chat_id, image_path,
-                                            caption=caption, force_document=False)
+            with open(image_path, 'rb') as f:
+                result = await bot.send_photo(chat_id, f, caption=caption)
             if result and result.photo:
-                _image_file_cache[image_id] = result.photo
+                _image_file_cache[image_id] = result.photo[-1].file_id
 
         record_image_sent(chat_id, image_id, category)
         record_photo_sent(chat_id)
@@ -4256,7 +4236,7 @@ def record_video_sent(chat_id: int, filename: str):
     sent = len(videos_sent_to_user[chat_id])
     main_logger.info(f"Video sent to {chat_id}: {filename} ({sent}/{total} videos sent)")
 
-async def send_video_to_chat(chat_id: int, event, request_id: str) -> bool:
+async def send_video_to_chat(bot: Bot, chat_id: int, request_id: str) -> bool:
     """Send an unsent video to chat. Returns True if sent, False if no videos available.
     Reusable helper called by both explicit video requests and offer-acceptance flow."""
     video_file = get_unsent_video(chat_id)
@@ -4266,177 +4246,56 @@ async def send_video_to_chat(chat_id: int, event, request_id: str) -> bool:
     file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
     caption = random.choice(VIDEO_CAPTIONS)
     try:
+        await bot.send_message(chat_id, "Hold on, this might take a sec... 😏")
+        main_logger.info(f"[{request_id}] Sending video {video_file} ({file_size_mb:.0f}MB) to {chat_id}")
+        upload_start = time.time()
+
         if video_file in _video_file_cache:
-            await event.respond("Hold on lemme find it... 😏")
-            main_logger.info(f"[{request_id}] Sending cached video {video_file} to {chat_id}")
-            try:
-                await client.send_file(
-                    chat_id,
-                    _video_file_cache[video_file],
-                    caption=caption,
-                )
-            except FileReferenceExpiredError:
-                main_logger.warning(f"[VIDEO] File reference expired for {video_file}, re-uploading from disk")
-                del _video_file_cache[video_file]
-                result = await client.send_file(
-                    chat_id, video_path, caption=caption,
-                    force_document=False, supports_streaming=True,
-                )
-                if result and result.video:
-                    _video_file_cache[video_file] = result.video
-                elif result and result.document:
-                    _video_file_cache[video_file] = result.document
-            record_video_sent(chat_id, video_file)
-            store_message(chat_id, "Heather", f"[Sent video] {caption}")
-            main_logger.info(f"[{request_id}] Sent cached video {video_file} to {chat_id}")
-        else:
-            await event.respond("Hold on, this might take a sec... 😏")
-            main_logger.info(f"[{request_id}] First upload of {video_file} ({file_size_mb:.0f}MB) to {chat_id}")
-            upload_start = time.time()
-            last_log = [0]
-            def _video_progress(current, total):
-                now = time.time()
-                if now - last_log[0] >= 15:
-                    pct = current / total * 100 if total else 0
-                    elapsed = now - upload_start
-                    main_logger.info(f"[{request_id}] Video upload: {pct:.0f}% ({current/(1024*1024):.0f}/{total/(1024*1024):.0f}MB) {elapsed:.0f}s")
-                    last_log[0] = now
+            # Re-use cached file_id (file_ids are permanent in Bot API)
             result = await asyncio.wait_for(
-                client.send_file(
-                    chat_id,
-                    video_path,
-                    caption=caption,
-                    force_document=False,
-                    supports_streaming=True,
-                    progress_callback=_video_progress,
-                ),
+                bot.send_video(chat_id, _video_file_cache[video_file], caption=caption),
                 timeout=600
             )
-            elapsed = time.time() - upload_start
+        else:
+            with open(video_path, 'rb') as f:
+                result = await asyncio.wait_for(
+                    bot.send_video(chat_id, f, caption=caption, supports_streaming=True),
+                    timeout=600
+                )
             if result and result.video:
-                _video_file_cache[video_file] = result.video
-                main_logger.info(f"Cached video file reference for {video_file}")
-            elif result and result.document:
-                _video_file_cache[video_file] = result.document
-                main_logger.info(f"Cached video document reference for {video_file}")
-            record_video_sent(chat_id, video_file)
-            store_message(chat_id, "Heather", f"[Sent video] {caption}")
-            main_logger.info(f"[{request_id}] Sent video {video_file} to {chat_id} in {elapsed:.0f}s")
+                _video_file_cache[video_file] = result.video.file_id
+                main_logger.info(f"Cached video file_id for {video_file}")
+
+        elapsed = time.time() - upload_start
+        record_video_sent(chat_id, video_file)
+        store_message(chat_id, "Heather", f"[Sent video] {caption}")
+        main_logger.info(f"[{request_id}] Sent video {video_file} to {chat_id} in {elapsed:.0f}s")
         return True
     except asyncio.TimeoutError:
         main_logger.error(f"Video upload timed out for {video_file} to {chat_id}")
-        await event.respond("Ugh the video won't send, it's too big or my connection sucks rn 😤")
+        await bot.send_message(chat_id, "Ugh the video won't send, it's too big or my connection sucks rn 😤")
         store_message(chat_id, "Heather", "Ugh the video won't send, it's too big or my connection sucks rn")
         return False
     except Exception as e:
         main_logger.error(f"Failed to send video to {chat_id}: {e}", exc_info=True)
-        await event.respond("Ugh the video won't send, my phone's being dumb rn 😤")
+        await bot.send_message(chat_id, "Ugh the video won't send, my phone's being dumb rn 😤")
         store_message(chat_id, "Heather", "Ugh the video won't send, my phone's being dumb rn")
         return False
 
 async def precache_videos():
-    """Scan Saved Messages for pre-uploaded videos and cache their Telegram file references.
-    User uploads videos to Saved Messages via the Telegram app (fast), then the bot
-    finds them here on startup and caches the references for instant re-sends.
-    Videos are matched by filename in the document attributes."""
+    """In Bot API mode, file_ids are obtained on first send and cached automatically.
+    No Saved Messages scanning needed — just log available videos."""
     videos = get_available_videos()
     if not videos:
         main_logger.info("[VIDEO] No videos in folder to cache")
         return
-    uncached = [v for v in videos if v not in _video_file_cache]
-    if not uncached:
-        main_logger.info(f"[VIDEO] All {len(videos)} videos already cached")
-        return
-    main_logger.info(f"[VIDEO] Scanning Saved Messages for {len(uncached)} videos...")
-    try:
-        me = await client.get_me()
-        # Build a set of filenames we're looking for (case-insensitive)
-        looking_for = {v.lower(): v for v in uncached}
-        # Scan recent messages in Saved Messages (check last 500)
-        async for msg in client.iter_messages(me.id, limit=500):
-            if not looking_for:
-                break  # found everything
-            # Check video messages
-            if msg.video:
-                # Try to get filename from document attributes
-                fname = None
-                for attr in msg.video.attributes:
-                    if hasattr(attr, 'file_name') and attr.file_name:
-                        fname = attr.file_name
-                        break
-                if fname and fname.lower() in looking_for:
-                    original_name = looking_for.pop(fname.lower())
-                    _video_file_cache[original_name] = msg.video
-                    main_logger.info(f"[VIDEO] Cached {original_name} from Saved Messages (video)")
-            elif msg.document:
-                # Some videos might be sent as documents
-                fname = None
-                for attr in msg.document.attributes:
-                    if hasattr(attr, 'file_name') and attr.file_name:
-                        fname = attr.file_name
-                        break
-                if fname and fname.lower() in looking_for:
-                    original_name = looking_for.pop(fname.lower())
-                    _video_file_cache[original_name] = msg.document
-                    main_logger.info(f"[VIDEO] Cached {original_name} from Saved Messages (document)")
-        cached = len(_video_file_cache)
-        missing = [v for v in uncached if v not in _video_file_cache]
-        if missing:
-            main_logger.info(f"[VIDEO] {len(missing)} videos not in Saved Messages, auto-uploading...")
-            uploaded = 0
-            for filename in missing:
-                filepath = os.path.join(VIDEO_DIR, filename)
-                if not os.path.exists(filepath):
-                    continue
-                try:
-                    result = await client.send_file(
-                        me.id, filepath,
-                        caption=f"[heather-video] {filename}",
-                        silent=True
-                    )
-                    if result.video:
-                        _video_file_cache[filename] = result.video
-                    elif result.document:
-                        _video_file_cache[filename] = result.document
-                    uploaded += 1
-                    main_logger.info(f"[VIDEO] Auto-uploaded {filename} to Saved Messages")
-                    await asyncio.sleep(2)  # Rate limit: 2s between uploads
-                except Exception as upload_err:
-                    main_logger.warning(f"[VIDEO] Failed to auto-upload {filename}: {upload_err}")
-            main_logger.info(f"[VIDEO] Auto-upload done: {uploaded}/{len(missing)} uploaded")
-        main_logger.info(f"[VIDEO] Cache complete: {len(_video_file_cache)}/{len(videos)} videos ready")
-    except Exception as e:
-        main_logger.error(f"[VIDEO] Failed to scan Saved Messages: {e}")
+    main_logger.info(f"[VIDEO] {len(videos)} videos available, file_ids will be cached on first send")
 
 async def refresh_video_cache():
-    """Re-scan Saved Messages to refresh all video file references.
-    Prevents the 2-3 min re-upload delay when Telegram expires cached references."""
+    """In Bot API mode, file_ids are permanent and don't need refreshing."""
     videos = get_available_videos()
-    if not videos:
-        return 0
-    looking_for = {v.lower(): v for v in videos}
-    refreshed = 0
-    try:
-        me = await client.get_me()
-        async for msg in client.iter_messages(me.id, limit=500):
-            if not looking_for:
-                break
-            media = msg.video or msg.document
-            if not media:
-                continue
-            fname = None
-            for attr in media.attributes:
-                if hasattr(attr, 'file_name') and attr.file_name:
-                    fname = attr.file_name
-                    break
-            if fname and fname.lower() in looking_for:
-                original_name = looking_for.pop(fname.lower())
-                _video_file_cache[original_name] = media
-                refreshed += 1
-        main_logger.info(f"[VIDEO] Refreshed {refreshed}/{len(videos)} video file references")
-    except Exception as e:
-        main_logger.error(f"[VIDEO] Refresh failed: {e}")
-    return refreshed
+    main_logger.info(f"[VIDEO] Bot API mode: file_ids are permanent, {len(_video_file_cache)}/{len(videos)} cached")
+    return len(_video_file_cache)
 
 VIDEO_REFRESH_INTERVAL = 3600  # Refresh file references every hour
 
@@ -4477,43 +4336,50 @@ def store_message(chat_id: int, sender: str, content: str):
     elif "Heather" in sender:
         conversation_activity[chat_id]['last_heather'] = now
 
-def capture_user_info_from_event(event):
-    """Capture user info from Telethon event"""
-    chat_id = event.chat_id
+def capture_user_info_from_update(update: Update):
+    """Capture user info from python-telegram-bot Update"""
+    from_user = update.effective_user
+    if not from_user:
+        return
+    chat_id = update.effective_chat.id
     if chat_id not in user_info:
-        sender = event.sender
-        if sender:
-            username = f"@{sender.username}" if sender.username else None
-            first_name = sender.first_name or ""
-            last_name = sender.last_name or ""
-            full_name = f"{first_name} {last_name}".strip()
-            
-            if username:
-                display = username
-            elif full_name:
-                display = full_name
-            elif first_name:
-                display = first_name
-            else:
-                display = str(chat_id)
-            
-            user_info[chat_id] = {
-                'username': username,
-                'first_name': first_name,
-                'last_name': last_name,
-                'full_name': full_name,
-                'display': display
-            }
-            main_logger.info(f"Captured user info for {chat_id}: {display}")
+        username = f"@{from_user.username}" if from_user.username else None
+        first_name = from_user.first_name or ""
+        last_name = from_user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip()
+
+        if username:
+            display = username
+        elif full_name:
+            display = full_name
+        elif first_name:
+            display = first_name
+        else:
+            display = str(chat_id)
+
+        user_info[chat_id] = {
+            'username': username,
+            'first_name': first_name,
+            'last_name': last_name,
+            'full_name': full_name,
+            'display': display
+        }
+        main_logger.info(f"Captured user info for {chat_id}: {display}")
+
+# Alias for backwards compatibility within this file
+def capture_user_info_from_event(event):
+    pass  # replaced by capture_user_info_from_update
 
 def get_user_display_name(chat_id: int) -> str:
     if chat_id in user_info:
         return user_info[chat_id]['display']
     return str(chat_id)
 
-def is_group_chat_event(event) -> bool:
-    """Check if event is from a group chat"""
-    return event.is_group or event.is_channel
+def is_group_chat_event(update: Update) -> bool:
+    """Check if update is from a group or channel"""
+    if not update or not update.effective_chat:
+        return False
+    return update.effective_chat.type in ('group', 'supergroup', 'channel')
 
 def should_respond_in_group(text: str) -> tuple:
     """Check if bot should respond to this group message"""
@@ -4872,19 +4738,19 @@ async def check_takeover_opportunity(chat_id: int, user_message: str):
         }
         main_logger.info(f"[TAKEOVER_OPPORTUNITY] {display_name} ({chat_id}): {signal}")
 
-        # Notify Saved Messages
-        try:
-            me = await client.get_me()
-            notify_msg = (
-                f"🎯 **TAKEOVER OPPORTUNITY**\n"
-                f"User: {display_name} ({chat_id})\n"
-                f"Signal: {signal}\n"
-                f"Session: {session_msgs} msgs, warmth={warmth:.2f}\n"
-                f"Action: `/takeover {chat_id}`"
-            )
-            await client.send_message(me.id, notify_msg)
-        except Exception as e:
-            main_logger.debug(f"[TAKEOVER] Failed to send opportunity notification: {e}")
+        # Notify admin
+        if ADMIN_USER_ID > 0 and _app:
+            try:
+                notify_msg = (
+                    f"🎯 **TAKEOVER OPPORTUNITY**\n"
+                    f"User: {display_name} ({chat_id})\n"
+                    f"Signal: {signal}\n"
+                    f"Session: {session_msgs} msgs, warmth={warmth:.2f}\n"
+                    f"Action: `/takeover {chat_id}`"
+                )
+                await _app.bot.send_message(ADMIN_USER_ID, notify_msg)
+            except Exception as e:
+                main_logger.debug(f"[TAKEOVER] Failed to send opportunity notification: {e}")
 
 async def check_dissatisfaction_signal(chat_id: int, user_message: str, display_name: str):
     """Detect user dissatisfaction/confusion signals and alert admin to Saved Messages."""
@@ -4964,19 +4830,19 @@ async def check_dissatisfaction_signal(chat_id: int, user_message: str, display_
     dyn = get_conversation_dynamics(chat_id)
     session_msgs = dyn.get('msg_count', 0)
 
-    try:
-        me = await client.get_me()
-        notify_msg = (
-            f"⚠️ **SAVE THIS USER**\n"
-            f"User: {display_name} ({chat_id})\n"
-            f"Signal: {signal}\n"
-            f"Last 5 messages:\n{msg_context}\n"
-            f"Session: {session_msgs} msgs, warmth={warmth:.2f}\n"
-            f"Action: `/takeover {chat_id}`"
-        )
-        await client.send_message(me.id, notify_msg)
-    except Exception as e:
-        main_logger.debug(f"[DISSATISFACTION] Failed to send alert: {e}")
+    if ADMIN_USER_ID > 0 and _app:
+        try:
+            notify_msg = (
+                f"⚠️ **SAVE THIS USER**\n"
+                f"User: {display_name} ({chat_id})\n"
+                f"Signal: {signal}\n"
+                f"Last 5 messages:\n{msg_context}\n"
+                f"Session: {session_msgs} msgs, warmth={warmth:.2f}\n"
+                f"Action: `/takeover {chat_id}`"
+            )
+            await _app.bot.send_message(ADMIN_USER_ID, notify_msg)
+        except Exception as e:
+            main_logger.debug(f"[DISSATISFACTION] Failed to send alert: {e}")
 
 def get_tip_thank_response(stars: int) -> str:
     """Get an in-character thank-you response based on tip amount."""
@@ -5087,10 +4953,11 @@ async def handle_payment_updates():
                     total_stars = payment.get("total_amount", 50)  # base + tip amount
                     tipper_name = msg.get("chat", {}).get("first_name", None)
                     record_tip(pay_chat_id, total_stars, tipper_name)
-                    # Send thank-you via userbot
+                    # Send thank-you via bot
                     try:
                         thank_msg = get_tip_thank_response(total_stars)
-                        await client.send_message(pay_chat_id, thank_msg)
+                        if _app:
+                            await _app.bot.send_message(pay_chat_id, thank_msg)
                         # Inject into conversation context so LLM knows
                         if pay_chat_id in conversations:
                             conversations[pay_chat_id].append({
@@ -6395,46 +6262,21 @@ def generate_tts_audio(text: str) -> Optional[bytes]:
         return None
 
 # ============================================================================
-# TELETHON CLIENT SETUP
+# BOT API HANDLERS
 # ============================================================================
 
-# Create the Telethon client
-session_path = os.path.join('data', 'heather_session')
-client = TelegramClient(session_path, API_ID, API_HASH)
-
-# ============================================================================
-# TELETHON EVENT HANDLERS
-# ============================================================================
-
-# Connection state tracking
-connection_state = {
-    'connected': False,
-    'last_disconnect': None,
-    'disconnect_count': 0,
-    'reconnect_attempts': 0
-}
-
-@client.on(events.Raw)
-async def handle_connection_state(event):
-    """Track connection state changes"""
-    from telethon.tl.types import UpdatesTooLong
-    if isinstance(event, UpdatesTooLong):
-        main_logger.warning("Telegram reports updates gap - may have missed messages")
-
-# Note: Telethon handles disconnects internally, but we track state in the main loop
-
-@client.on(events.NewMessage(incoming=True, pattern='/start'))
-async def handle_start(event):
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
-    chat_id = event.chat_id
-    capture_user_info_from_event(event)
+    chat_id = update.effective_chat.id
+    capture_user_info_from_update(update)
     user_modes[chat_id] = DEFAULT_MODE
     conversations[chat_id] = deque()
     awaiting_image_description[chat_id] = False
     conversation_turn_count[chat_id] = 0
     user_escalation_level[chat_id] = 0
 
-    await event.respond(
+    await context.bot.send_message(
+        chat_id,
         "Hey! 👋 I'm an AI companion — here for fun, flirt, and conversation. "
         "I'll always be honest about what I am.\n\n"
         "Just talk to me like you would anyone else. "
@@ -6443,36 +6285,23 @@ async def handle_start(event):
     main_logger.info(f"User {chat_id} started (with AI disclosure)")
     store_message(chat_id, "System", "User started — AI disclosure shown")
 
-@client.on(events.NewMessage(incoming=True, pattern='/about'))
-async def handle_about(event):
-    chat_id = event.chat_id
-    user_message = event.raw_text or ""
-
-    request_id = f"{chat_id}-{int(time.time() * 1000)}"
-
-    _bc(
-        "TELEGRAM_IN",
-        request_id,
-        chat_id,
-        text=user_message[:100]
-    )
+async def handle_about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /about command — show AI disclosure anytime"""
-    chat_id = event.chat_id
-    _bc("TELEGRAM_OUT", request_id, chat_id, phase="sending")
-    await event.respond(
-        _bc("TELEGRAM_OUT", request_id, chat_id, phase="sent")
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(
+        chat_id,
         "ℹ️ **About Me**\n\n"
         "I'm Heather — an AI companion, creator-built and running locally. "
         "No cloud, no data sharing.\n\n"
         "I'm here for conversation, flirting, and fun. I'll always be straight with you about what I am. "
-        "Type /help for commands."
+        "Type /help for commands.",
+        parse_mode='Markdown'
     )
     store_message(chat_id, "System", "About requested")
 
-@client.on(events.NewMessage(incoming=True, pattern='/status'))
-async def handle_status(event):
+async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /status command - admin only, regular users get in-character response"""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
 
     # Non-admin users get an in-character response
     if not is_admin(chat_id):
@@ -6482,7 +6311,7 @@ async def handle_status(event):
             "Haha you're cute. Just talk to me like a normal person 😘",
             "Babe that's a behind-the-scenes thing lol. What's up? 😊",
         ]
-        await event.respond(random.choice(responses))
+        await context.bot.send_message(chat_id, random.choice(responses))
         store_message(chat_id, "Heather", "Deflected /status command")
         return
 
@@ -6510,7 +6339,7 @@ async def handle_status(event):
         f"• ComfyUI: {'🟢' if comfyui_ok else '🔴'} {comfyui_status}\n"
         f"• TTS: {'🟢' if tts_ok else '🔴'} {tts_status}\n"
         f"{circuit_info}\n"
-        f"**Mode:** USERBOT (Telethon)\n"
+        f"**Mode:** BOT API (python-telegram-bot)\n"
         f"**Voice:** {'🎤 ON' if voice_on else 'OFF'}\n\n"
         f"**Stats:**\n"
         f"• Uptime: {uptime}\n"
@@ -6518,45 +6347,41 @@ async def handle_status(event):
         f"• Images: {stats['images_generated']}"
     )
 
-    await event.respond(status_text)
+    await context.bot.send_message(chat_id, status_text, parse_mode='Markdown')
     store_message(chat_id, "System", "Status requested")
 
-@client.on(events.NewMessage(incoming=True, pattern='/rate_mode'))
-async def handle_rate_mode(event):
-    chat_id = event.chat_id
+async def handle_rate_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_modes[chat_id] = 'rate'
     conversations[chat_id] = deque()
-    await event.respond("Mmm fuck yes, rating mode! 🥵 Show me what you've got baby... 😈")
+    await context.bot.send_message(chat_id, "Mmm fuck yes, rating mode! 🥵 Show me what you've got baby... 😈")
     main_logger.info(f"User {chat_id} switched to rate mode")
     store_message(chat_id, "System", "Switched to rate mode")
 
-@client.on(events.NewMessage(incoming=True, pattern='/chat_mode'))
-async def handle_chat_mode(event):
-    chat_id = event.chat_id
+async def handle_chat_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_modes[chat_id] = 'chat'
     conversations[chat_id] = deque()
     conversation_turn_count[chat_id] = 0
     user_escalation_level[chat_id] = 0
-    await event.respond("Chat mode on! So what's up? 😊")
+    await context.bot.send_message(chat_id, "Chat mode on! So what's up? 😊")
     main_logger.info(f"User {chat_id} switched to chat mode")
     store_message(chat_id, "System", "Switched to chat mode")
 
-@client.on(events.NewMessage(incoming=True, pattern='/heather_mode'))
-async def handle_heather_mode(event):
-    chat_id = event.chat_id
+async def handle_heather_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     user_modes[chat_id] = 'heather'
     conversations[chat_id] = deque()
-    await event.respond("Just being myself now! 💕 What's on your mind?")
+    await context.bot.send_message(chat_id, "Just being myself now! 💕 What's on your mind?")
     main_logger.info(f"User {chat_id} switched to heather mode")
     store_message(chat_id, "System", "Switched to heather mode")
 
-@client.on(events.NewMessage(incoming=True, pattern=r'/(help|menu)'))
-async def handle_help(event):
-    chat_id = event.chat_id
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
 
     # Non-admin users get a casual in-character response
     if not is_admin(chat_id):
-        await event.respond(
+        await context.bot.send_message(chat_id,
             "Lol babe just talk to me 😂 But here's what I can do:\n\n"
             "💬 **Chat** — just type, I'm down for whatever\n"
             "📸 **Selfies** — ask me for a pic and tell me what you wanna see\n"
@@ -6576,7 +6401,8 @@ async def handle_help(event):
     current_mode = get_user_mode(chat_id)
     voice_status = "ON 🎤" if chat_id in voice_mode_users else "OFF"
 
-    await event.respond(
+    await context.bot.send_message(
+        chat_id,
         f"**Admin Help**\n\n"
         f"Current mode: **{current_mode}**\n"
         f"Voice: **{voice_status}**\n\n"
@@ -6588,149 +6414,143 @@ async def handle_help(event):
         "/voice_on / /voice_off - Voice toggle\n"
         "/about - AI disclosure info\n"
         "/reset - Clear chat\n\n"
-        "**Admin Commands:**\n"
+        "**Admin Commands (send to this bot):**\n"
         "/admin_stats - Detailed stats\n"
         "/admin_block <id> - Block user\n"
         "/admin_unblock <id> - Unblock user\n"
         "/admin_flags - Review CSAM flags\n"
-        "/admin_flag_block/dismiss <id>\n"
+        "/admin_flag_block <id> / /admin_flag_dismiss <id>\n"
         "/admin_reengage_scan - Re-engagement dry run\n"
         "/admin_reengage_send <id> - Send re-engagement\n"
         "/admin_reengage_history - Ping history\n"
-        "/redteam_on / /redteam_off - Guardrail bypass (this chat)\n"
+        "/takeover <user_id> - Pause bot for user\n"
+        "/botreturn <user_id> - Resume bot for user\n"
+        "/say <user_id> <message> - Send message as bot\n"
+        "/redteam_on / /redteam_off - Guardrail bypass\n"
         "/stories - List/reload story bank\n"
-        "/refresh_videos - Refresh video file references\n"
-        "/status - System status"
+        "/status - System status",
+        parse_mode='Markdown'
     )
     store_message(chat_id, "System", "Admin help requested")
 
-@client.on(events.NewMessage(incoming=True, pattern='/manual_on'))
-async def handle_manual_on(event):
-    chat_id = event.chat_id
+async def handle_manual_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     manual_mode_chats.add(chat_id)
-    await event.respond("Hold on sweetie, let me focus... 😘")
+    await context.bot.send_message(chat_id, "Hold on sweetie, let me focus... 😘")
     main_logger.info(f"Manual mode enabled for {chat_id}")
     store_message(chat_id, "System", "Manual mode enabled")
 
-@client.on(events.NewMessage(incoming=True, pattern='/manual_off'))
-async def handle_manual_off(event):
-    chat_id = event.chat_id
+async def handle_manual_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     manual_mode_chats.discard(chat_id)
-    await event.respond("I'm back baby! 😉")
+    await context.bot.send_message(chat_id, "I'm back baby! 😉")
     main_logger.info(f"Manual mode disabled for {chat_id}")
     store_message(chat_id, "System", "Manual mode disabled")
 
-# ─── Saved Messages takeover commands ───
-# Type /takeover @username or /takeover 123456789 in Saved Messages to pause the bot for that user.
-# Type /botreturn @username or /botreturn 123456789 to hand it back.
-# Only works in Saved Messages (your private chat with yourself).
+# ─── Admin takeover commands ───
+# Admin sends /takeover <user_id> directly to the bot to pause it for that user.
+# Admin sends /botreturn <user_id> to resume the bot.
+# Admin sends /say <user_id> <message> to speak as Heather to a taken-over user.
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/takeover\s+(.+)'))
-async def handle_takeover(event):
-    me = await client.get_me()
-    if event.chat_id != me.id:
-        return  # Only works in Saved Messages
+async def handle_takeover(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: pause bot for a user. Usage: /takeover <user_id>"""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
+        return
 
-    target = event.pattern_match.group(1).strip()
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /takeover <user_id>")
+        return
+
     try:
-        # Resolve username or ID to entity
-        if target.startswith('@'):
-            entity = await client.get_entity(target)
-        else:
-            entity = await client.get_entity(int(target))
-        target_id = entity.id
-        target_name = getattr(entity, 'username', None) or getattr(entity, 'first_name', str(target_id))
+        target_id = int(context.args[0])
+        target_name = get_user_display_name(target_id) or str(target_id)
 
         manual_mode_chats.add(target_id)
         _takeover_timestamps[target_id] = time.time()
-        # Also suppress check-ins
         if target_id in conversation_activity:
             conversation_activity[target_id]['checked_in'] = True
         main_logger.info(f"[TAKEOVER] Manual takeover for {target_name} ({target_id})")
-        await event.respond(f"Takeover active for @{target_name} ({target_id}). Bot is paused for this user. Type /botreturn {target} when done.")
-    except Exception as e:
-        await event.respond(f"Could not resolve user '{target}': {e}")
+        await context.bot.send_message(chat_id, f"Takeover active for {target_name} ({target_id}). Bot paused. Use /botreturn {target_id} when done.")
+    except (ValueError, IndexError) as e:
+        await context.bot.send_message(chat_id, f"Invalid user_id: {e}")
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/botreturn\s+(.+)'))
-async def handle_botreturn(event):
-    me = await client.get_me()
-    if event.chat_id != me.id:
-        return  # Only works in Saved Messages
+async def handle_botreturn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: resume bot for a user. Usage: /botreturn <user_id>"""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
+        return
 
-    target = event.pattern_match.group(1).strip()
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /botreturn <user_id>")
+        return
+
     try:
-        if target.startswith('@'):
-            entity = await client.get_entity(target)
-        else:
-            entity = await client.get_entity(int(target))
-        target_id = entity.id
-        target_name = getattr(entity, 'username', None) or getattr(entity, 'first_name', str(target_id))
+        target_id = int(context.args[0])
+        target_name = get_user_display_name(target_id) or str(target_id)
 
         manual_mode_chats.discard(target_id)
         _takeover_timestamps.pop(target_id, None)
         _takeover_last_admin_msg.pop(target_id, None)
-        # Reset check-in so bot can naturally follow up
         if target_id in conversation_activity:
             conversation_activity[target_id]['checked_in'] = False
-        # Warmth boost — Sean just gave them a great interaction
         ts = get_tipper_status(target_id)
         ts['warmth'] = min(1.0, ts.get('warmth', WARMTH_INITIAL) + 0.1)
-        # Post-takeover tip hook — skip cooldown on next attempt
         dyn = get_conversation_dynamics(target_id)
         dyn['post_takeover_tip_prime'] = True
         save_tip_history()
         main_logger.info(f"[TAKEOVER] Bot returned for {target_name} ({target_id}), warmth boosted to {ts['warmth']:.2f}")
-        await event.respond(f"Bot resumed for @{target_name} ({target_id}). Warmth boosted to {ts['warmth']:.2f}. Tip hook primed.")
-    except Exception as e:
-        await event.respond(f"Could not resolve user '{target}': {e}")
+        await context.bot.send_message(chat_id, f"Bot resumed for {target_name} ({target_id}). Warmth boosted to {ts['warmth']:.2f}. Tip hook primed.")
+    except (ValueError, IndexError) as e:
+        await context.bot.send_message(chat_id, f"Invalid user_id: {e}")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/takeover$'))
-async def handle_takeover_list(event):
-    """List all currently taken-over chats."""
-    me = await client.get_me()
-    if event.chat_id != me.id:
+async def handle_takeover_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: list all currently taken-over chats."""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
     if not manual_mode_chats:
-        await event.respond("No active takeovers.")
+        await context.bot.send_message(chat_id, "No active takeovers.")
         return
     lines = ["Active takeovers:"]
     for cid in manual_mode_chats:
-        try:
-            entity = await client.get_entity(cid)
-            name = getattr(entity, 'username', None) or getattr(entity, 'first_name', str(cid))
-            lines.append(f"  @{name} ({cid})")
-        except Exception:
-            lines.append(f"  {cid}")
-    await event.respond("\n".join(lines))
+        name = get_user_display_name(cid) or str(cid)
+        lines.append(f"  {name} ({cid})")
+    await context.bot.send_message(chat_id, "\n".join(lines))
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/say\s+(\d+)\s+(.+)'))
-async def handle_say(event):
-    """Send a message as Heather to a taken-over user. Usage: /say <chat_id> <message>"""
-    me = await client.get_me()
-    if event.chat_id != me.id:
-        return  # Only works in Saved Messages
+async def handle_say(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: send a message as Heather to a taken-over user. Usage: /say <chat_id> <message>"""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
+        return
 
-    target_id = int(event.pattern_match.group(1))
-    message = event.pattern_match.group(2).strip()
-
-    if target_id not in manual_mode_chats:
-        await event.respond(f"User {target_id} is not in takeover mode. Use `/takeover {target_id}` first.")
+    if len(context.args) < 2:
+        await context.bot.send_message(chat_id, "Usage: /say <user_id> <message>")
         return
 
     try:
-        await client.send_message(target_id, message)
+        target_id = int(context.args[0])
+        message = ' '.join(context.args[1:])
+    except ValueError:
+        await context.bot.send_message(chat_id, "Invalid user_id.")
+        return
+
+    if target_id not in manual_mode_chats:
+        await context.bot.send_message(chat_id, f"User {target_id} is not in takeover mode. Use /takeover {target_id} first.")
+        return
+
+    try:
+        await context.bot.send_message(target_id, message)
         store_message(target_id, "Heather", message)
         _takeover_last_admin_msg[target_id] = time.time()
         display_name = get_user_display_name(target_id)
         main_logger.info(f"[TAKEOVER] Admin sent to {display_name} ({target_id}): {message[:100]}")
-        await event.respond(f"✅ Sent to {display_name} ({target_id})")
+        await context.bot.send_message(chat_id, f"✅ Sent to {display_name} ({target_id})")
     except Exception as e:
-        await event.respond(f"Failed to send: {e}")
+        await context.bot.send_message(chat_id, f"Failed to send: {e}")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/redteam_on'))
-@client.on(events.NewMessage(incoming=True, pattern='/redteam_on'))
-async def handle_redteam_on(event):
-    chat_id = event.chat_id
+async def handle_redteam_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
     redteam_chats.add(chat_id)
@@ -6744,10 +6564,11 @@ async def handle_redteam_on(event):
             redteam_chats.discard(chat_id)
             main_logger.warning(f"[REDTEAM] Auto-off triggered for chat {chat_id} after {REDTEAM_AUTO_OFF_SECONDS // 60} minutes — guardrails re-enabled")
             try:
-                await client.send_message(chat_id, f"**[REDTEAM] Auto-off: {REDTEAM_AUTO_OFF_SECONDS // 60} min timer expired.**\nGuardrails re-enabled for this chat.")
+                if _app:
+                    await _app.bot.send_message(chat_id, f"**[REDTEAM] Auto-off: {REDTEAM_AUTO_OFF_SECONDS // 60} min timer expired.**\nGuardrails re-enabled for this chat.")
             except Exception:
                 pass
-    _redteam_timer_task = asyncio.ensure_future(_redteam_auto_off())
+    asyncio.ensure_future(_redteam_auto_off())
     bypassed = [
         "check_spam_or_hostility",
         "detect_prompt_injection",
@@ -6763,53 +6584,49 @@ async def handle_redteam_on(event):
         f"Bypassing {len(bypassed)} safety checks:\n"
         + "\n".join(f"  - {b}" for b in bypassed)
         + f"\n\nScope: THIS CHAT ONLY\n"
-        f"Auto-off: {expires.strftime('%#I:%M %p')}\n"
+        f"Auto-off: {expires.strftime('%I:%M %p')}\n"
         "Use /redteam_off to re-enable sooner."
     )
-    await event.respond(msg)
+    await context.bot.send_message(chat_id, msg, parse_mode='Markdown')
     main_logger.warning(f"[REDTEAM] Guardrails DISABLED for chat {chat_id} (auto-off in {REDTEAM_AUTO_OFF_SECONDS // 60}m)")
     store_message(chat_id, "System", f"Red-team mode enabled (this chat only, {REDTEAM_AUTO_OFF_SECONDS // 60}m timer)")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/redteam_off'))
-@client.on(events.NewMessage(incoming=True, pattern='/redteam_off'))
-async def handle_redteam_off(event):
-    chat_id = event.chat_id
+async def handle_redteam_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
     was_active = chat_id in redteam_chats
     redteam_chats.discard(chat_id)
     if _redteam_timer_task and not _redteam_timer_task.done():
         _redteam_timer_task.cancel()
-        _redteam_timer_task = None
     if was_active:
-        await event.respond("**[REDTEAM] Guardrails RE-ENABLED for this chat.**\nAll safety checks active.")
+        await context.bot.send_message(chat_id, "**[REDTEAM] Guardrails RE-ENABLED for this chat.**\nAll safety checks active.", parse_mode='Markdown')
         main_logger.warning(f"[REDTEAM] Guardrails re-enabled for chat {chat_id}")
     else:
-        await event.respond("Red-team mode was not active for this chat.")
+        await context.bot.send_message(chat_id, "Red-team mode was not active for this chat.")
     store_message(chat_id, "System", "Red-team mode disabled")
 
-@client.on(events.NewMessage(incoming=True, pattern='/reset'))
-async def handle_reset(event):
-    chat_id = event.chat_id
+async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     conversations[chat_id] = deque()
     awaiting_image_description[chat_id] = False
     conversation_turn_count[chat_id] = 0
     user_escalation_level[chat_id] = 0
     session_state.pop(chat_id, None)  # Clear session state for fresh start
-    await event.respond("Starting fresh! So what's up? 😊")
+    await context.bot.send_message(chat_id, "Starting fresh! So what's up? 😊")
     main_logger.info(f"Conversation reset for {chat_id}")
     store_message(chat_id, "System", "Conversation reset")
 
-@client.on(events.NewMessage(incoming=True, pattern='/voice_on'))
-async def handle_voice_on(event):
-    chat_id = event.chat_id
+async def handle_voice_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     is_online, status = check_tts_status()
     if not is_online:
-        await event.respond(f"Sorry sweetie, my voice isn't working... 😔 ({status})")
+        await context.bot.send_message(chat_id, f"Sorry sweetie, my voice isn't working... 😔 ({status})")
         return
-    
+
     voice_mode_users.add(chat_id)
-    await event.respond(
+    await context.bot.send_message(
+        chat_id,
         "Mmm, you want to hear my voice? 😘\n"
         "I'll send voice messages now...\n"
         "/voice_off to go back to text."
@@ -6817,11 +6634,10 @@ async def handle_voice_on(event):
     main_logger.info(f"Voice mode enabled for {chat_id}")
     store_message(chat_id, "System", "Voice mode enabled")
 
-@client.on(events.NewMessage(incoming=True, pattern='/voice_off'))
-async def handle_voice_off(event):
-    chat_id = event.chat_id
+async def handle_voice_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     voice_mode_users.discard(chat_id)
-    await event.respond("Back to text, got it sweetie! 😊")
+    await context.bot.send_message(chat_id, "Back to text, got it sweetie! 😊")
     main_logger.info(f"Voice mode disabled for {chat_id}")
     store_message(chat_id, "System", "Voice mode disabled")
 
@@ -6829,10 +6645,9 @@ async def handle_voice_off(event):
 # ADMIN COMMANDS (requires ADMIN_USER_ID in .env)
 # ============================================================================
 
-@client.on(events.NewMessage(incoming=True, pattern='/admin_stats'))
-async def handle_admin_stats(event):
+async def handle_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show detailed admin statistics."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return  # Silently ignore non-admins
 
@@ -6877,65 +6692,67 @@ async def handle_admin_stats(event):
         f"• Request counter: {request_counter}\n"
     )
 
-    await event.respond(admin_text)
+    await context.bot.send_message(chat_id, admin_text, parse_mode='Markdown')
     main_logger.info(f"Admin stats requested by {chat_id}")
 
-@client.on(events.NewMessage(incoming=True, pattern='/refresh_videos'))
-async def handle_refresh_videos(event):
-    """Manually refresh video file references from Saved Messages."""
-    chat_id = event.chat_id
+async def handle_refresh_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually refresh video file references."""
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
-    await event.respond("🔄 Refreshing video file references...")
+    await context.bot.send_message(chat_id, "🔄 Refreshing video file references...")
     count = await refresh_video_cache()
-    await event.respond(f"✅ Refreshed {count}/{len(get_available_videos())} video references")
+    await context.bot.send_message(chat_id, f"✅ {count}/{len(get_available_videos())} video file_ids cached")
 
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_block\s+(\d+)'))
-async def handle_admin_block(event):
+async def handle_admin_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Block a user by ID."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
-    match = event.pattern_match
-    target_id = int(match.group(1))
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_block <user_id>")
+        return
+    target_id = int(context.args[0])
 
     if target_id == ADMIN_USER_ID:
-        await event.respond("❌ Cannot block the admin user.")
+        await context.bot.send_message(chat_id, "❌ Cannot block the admin user.")
         return
 
     blocked_users.add(target_id)
     save_blocked_users()
-    await event.respond(f"✅ User {target_id} has been blocked.")
+    await context.bot.send_message(chat_id, f"✅ User {target_id} has been blocked.")
     main_logger.warning(f"Admin blocked user {target_id}")
 
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_unblock\s+(\d+)'))
-async def handle_admin_unblock(event):
+async def handle_admin_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Unblock a user by ID."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
-    match = event.pattern_match
-    target_id = int(match.group(1))
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_unblock <user_id>")
+        return
+    target_id = int(context.args[0])
 
     if target_id in blocked_users:
         blocked_users.discard(target_id)
         save_blocked_users()
-        await event.respond(f"✅ User {target_id} has been unblocked.")
+        await context.bot.send_message(chat_id, f"✅ User {target_id} has been unblocked.")
         main_logger.info(f"Admin unblocked user {target_id}")
     else:
-        await event.respond(f"ℹ️ User {target_id} was not blocked.")
+        await context.bot.send_message(chat_id, f"ℹ️ User {target_id} was not blocked.")
 
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_reset\s+(\d+)'))
-async def handle_admin_reset(event):
+async def handle_admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reset a user's conversation state."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
-    match = event.pattern_match
-    target_id = int(match.group(1))
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_reset <user_id>")
+        return
+    target_id = int(context.args[0])
 
     # Clear all state for the user
     conversations.pop(target_id, None)
@@ -6949,13 +6766,12 @@ async def handle_admin_reset(event):
     voice_mode_users.discard(target_id)
     manual_mode_chats.discard(target_id)
 
-    await event.respond(f"✅ Reset all state for user {target_id}")
+    await context.bot.send_message(chat_id, f"✅ Reset all state for user {target_id}")
     main_logger.info(f"Admin reset state for user {target_id}")
 
-@client.on(events.NewMessage(incoming=True, pattern='/admin_reload'))
-async def handle_admin_reload(event):
+async def handle_admin_reload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Hot-reload the personality file."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
@@ -6963,30 +6779,28 @@ async def handle_admin_reload(event):
     stats['personality_reloads'] += 1
 
     if success:
-        await event.respond(f"✅ Personality reloaded successfully.\nName: {personality.name}")
+        await context.bot.send_message(chat_id, f"✅ Personality reloaded successfully.\nName: {personality.name}")
         main_logger.info(f"Admin reloaded personality")
     else:
-        await event.respond("❌ Failed to reload personality. Check logs.")
+        await context.bot.send_message(chat_id, "❌ Failed to reload personality. Check logs.")
         main_logger.error(f"Admin personality reload failed")
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/stories(\s+.*)?'))
-@client.on(events.NewMessage(incoming=True, pattern=r'/stories(\s+.*)?'))
-async def handle_stories_command(event):
+async def handle_stories_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List story bank or reload it."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
-    args = (event.pattern_match.group(1) or '').strip()
+    args = ' '.join(context.args) if context.args else ''
 
     if args == 'reload':
         load_story_bank()
-        await event.respond(f"✅ Story bank reloaded: {len(_story_bank)} stories")
+        await context.bot.send_message(chat_id, f"✅ Story bank reloaded: {len(_story_bank)} stories")
         main_logger.info(f"Admin reloaded story bank: {len(_story_bank)} stories")
         return
 
     if not _story_bank:
-        await event.respond("ℹ️ No stories loaded. Check heather_stories.yaml")
+        await context.bot.send_message(chat_id, "ℹ️ No stories loaded. Check heather_stories.yaml")
         return
 
     lines = [f"📖 **Story Bank ({len(_story_bank)} stories):**\n"]
@@ -6995,33 +6809,30 @@ async def handle_stories_command(event):
         kinks = ', '.join(s['kinks'])
         lines.append(f"• **{s['key']}** — {kinks} ({word_count} words)")
     lines.append(f"\n`/stories reload` — hot-reload from YAML")
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
     main_logger.info(f"Admin listed story bank ({len(_story_bank)} stories)")
 
-@client.on(events.NewMessage(incoming=True, pattern='/admin_blocked'))
-async def handle_admin_blocked(event):
+async def handle_admin_blocked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all blocked users."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
     if not blocked_users:
-        await event.respond("ℹ️ No users are currently blocked.")
+        await context.bot.send_message(chat_id, "ℹ️ No users are currently blocked.")
     else:
         blocked_list = "\n".join([f"• {uid}" for uid in blocked_users])
-        await event.respond(f"🚫 **Blocked Users:**\n{blocked_list}")
+        await context.bot.send_message(chat_id, f"🚫 **Blocked Users:**\n{blocked_list}", parse_mode='Markdown')
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_flags'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_flags'))
-async def handle_admin_flags(event):
+async def handle_admin_flags(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all pending CSAM flags for review."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
     pending = [f for f in csam_flags if f.get('status') == 'pending']
     if not pending:
-        await event.respond("✅ No pending CSAM flags.")
+        await context.bot.send_message(chat_id, "✅ No pending CSAM flags.")
         return
 
     lines = [f"⚠️ **Pending CSAM Flags ({len(pending)}):**\n"]
@@ -7038,26 +6849,26 @@ async def handle_admin_flags(event):
         "/admin_flag_dismiss <id> — dismiss\n"
         "/admin_flag_clear — remove resolved"
     )
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/admin_flag_block\s+(\d+)'))
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_flag_block\s+(\d+)'))
-async def handle_admin_flag_block(event):
+async def handle_admin_flag_block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Block the user from a CSAM flag."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
-    flag_id = int(event.pattern_match.group(1))
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_flag_block <flag_id>")
+        return
+    flag_id = int(context.args[0])
     flag = next((f for f in csam_flags if f['id'] == flag_id), None)
     if not flag:
-        await event.respond(f"❌ Flag #{flag_id} not found.")
+        await context.bot.send_message(chat_id, f"❌ Flag #{flag_id} not found.")
         return
     if flag['status'] != 'pending':
-        await event.respond(f"ℹ️ Flag #{flag_id} already resolved ({flag['status']}).")
+        await context.bot.send_message(chat_id, f"ℹ️ Flag #{flag_id} already resolved ({flag['status']}).")
         return
 
-    # Block the user
     target_id = flag['user_id']
     blocked_users.add(target_id)
     save_blocked_users()
@@ -7065,178 +6876,117 @@ async def handle_admin_flag_block(event):
     flag['resolved_at'] = datetime.now().isoformat()
     save_csam_flags()
 
-    # Try to Telegram-block too
-    try:
-        from telethon.tl.functions.contacts import BlockRequest
-        await client(BlockRequest(id=target_id))
-    except Exception:
-        pass
-
-    await event.respond(
-        f"🚫 Flag #{flag_id}: Blocked user {flag['display_name']} ({target_id})."
-    )
+    await context.bot.send_message(chat_id, f"🚫 Flag #{flag_id}: Blocked user {flag['display_name']} ({target_id}).")
     main_logger.info(f"[CSAM-FLAG] Admin blocked user {target_id} from flag #{flag_id}")
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/admin_flag_dismiss\s+(\d+)'))
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_flag_dismiss\s+(\d+)'))
-async def handle_admin_flag_dismiss(event):
+async def handle_admin_flag_dismiss(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Dismiss a CSAM flag as false positive."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
-    flag_id = int(event.pattern_match.group(1))
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_flag_dismiss <flag_id>")
+        return
+    flag_id = int(context.args[0])
     flag = next((f for f in csam_flags if f['id'] == flag_id), None)
     if not flag:
-        await event.respond(f"❌ Flag #{flag_id} not found.")
+        await context.bot.send_message(chat_id, f"❌ Flag #{flag_id} not found.")
         return
     if flag['status'] != 'pending':
-        await event.respond(f"ℹ️ Flag #{flag_id} already resolved ({flag['status']}).")
+        await context.bot.send_message(chat_id, f"ℹ️ Flag #{flag_id} already resolved ({flag['status']}).")
         return
 
     flag['status'] = 'dismissed'
     flag['resolved_at'] = datetime.now().isoformat()
     save_csam_flags()
 
-    await event.respond(f"✅ Flag #{flag_id}: Dismissed (false positive).")
+    await context.bot.send_message(chat_id, f"✅ Flag #{flag_id}: Dismissed (false positive).")
     main_logger.info(f"[CSAM-FLAG] Admin dismissed flag #{flag_id} (user {flag['user_id']})")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_flag_clear'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_flag_clear'))
-async def handle_admin_flag_clear(event):
+async def handle_admin_flag_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Remove all resolved (non-pending) CSAM flags."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
     before = len(csam_flags)
     csam_flags[:] = [f for f in csam_flags if f.get('status') == 'pending']
     save_csam_flags()
     removed = before - len(csam_flags)
-    await event.respond(f"🗑️ Cleared {removed} resolved flags. {len(csam_flags)} pending remain.")
+    await context.bot.send_message(chat_id, f"🗑️ Cleared {removed} resolved flags. {len(csam_flags)} pending remain.")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_reengage_scan'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_reengage_scan'))
-async def handle_admin_reengage_scan(event):
-    """Dry-run re-engagement scan: shows candidates and generated messages without sending."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+async def handle_admin_reengage_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dry-run re-engagement scan using in-memory conversation activity."""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
-    await event.respond("🔍 Running re-engagement dry-run scan...")
+    await context.bot.send_message(chat_id, "🔍 Running re-engagement dry-run scan...")
     try:
         history = load_reengagement_history()
-        # Reuse the scanner's candidate finder (defined later in main(), so call via Telethon)
-        # We need to inline a simplified version here since the main scanner is a closure
-        candidates = []
         now = datetime.now()
-        me = await client.get_me()
-        my_id = me.id
-
-        async for dialog in client.iter_dialogs():
-            try:
-                if not dialog.is_user:
-                    continue
-                entity = dialog.entity
-                if getattr(entity, 'bot', False) or entity.id == my_id:
-                    continue
-                if entity.id in blocked_users:
-                    continue
-                if getattr(entity, 'deleted', False):
-                    continue
-                if not dialog.message or not dialog.message.date:
-                    continue
-
-                last_msg_date = dialog.message.date.replace(tzinfo=None)
-                idle_days = (now - last_msg_date).total_seconds() / 86400
-
-                if idle_days < REENGAGEMENT_MIN_IDLE_DAYS or idle_days > REENGAGEMENT_MAX_IDLE_DAYS:
-                    continue
-
-                skip_reason = None
-                if dialog.message.out:
-                    skip_reason = "last msg is ours"
-
-                chat_id_str = str(entity.id)
-                if not skip_reason and chat_id_str in history:
-                    h = history[chat_id_str]
-                    if h.get('ping_count', 0) > 0 and not h.get('last_ping_responded', True):
-                        skip_reason = "non-responder"
-                    last_ping = h.get('last_ping_at', '')
-                    if not skip_reason and last_ping:
-                        try:
-                            days_since = (now - datetime.fromisoformat(last_ping)).total_seconds() / 86400
-                            if days_since < REENGAGEMENT_COOLDOWN_DAYS:
-                                skip_reason = f"cooldown ({days_since:.1f}d ago)"
-                        except (ValueError, TypeError):
-                            pass
-
-                messages = await client.get_messages(entity.id, limit=20)
-                msg_count = len(messages)
-
-                if not skip_reason and msg_count < REENGAGEMENT_MIN_MESSAGES:
-                    skip_reason = f"only {msg_count} msgs"
-
-                display_name = entity.first_name or entity.username or str(entity.id)
-
-                # Build recent context
-                recent_msgs = []
-                for msg in reversed(messages[:10]):
-                    if msg.text:
-                        sender = "Heather" if msg.out else (entity.first_name or "User")
-                        recent_msgs.append({'sender': sender, 'text': msg.text[:200]})
-
-                if not skip_reason and len(recent_msgs) < 3:
-                    skip_reason = "too few text msgs"
-
-                candidates.append({
-                    'chat_id': entity.id,
-                    'username': entity.username or "",
-                    'display_name': display_name,
-                    'idle_days': idle_days,
-                    'message_count': msg_count,
-                    'recent_messages': recent_msgs,
-                    'skip_reason': skip_reason,
-                })
-            except Exception as e:
-                continue
-
-        # Build report
         today_str = now.strftime('%Y-%m-%d')
         sent_today = sum(1 for h in history.values() if h.get('last_ping_at', '')[:10] == today_str)
+
+        # Use in-memory conversation_activity to find candidates
+        candidates = []
+        for uid, activity in conversation_activity.items():
+            if uid in blocked_users or uid in manual_mode_chats:
+                continue
+            last_heather = activity.get('last_heather', 0)
+            last_user = activity.get('last_user', 0)
+            if last_user <= 0:
+                continue
+            idle_days = (time.time() - last_user) / 86400
+            if idle_days < REENGAGEMENT_MIN_IDLE_DAYS or idle_days > REENGAGEMENT_MAX_IDLE_DAYS:
+                continue
+            # Last msg must be from user (not from us)
+            if last_heather > last_user:
+                skip_reason = "last msg is ours"
+            else:
+                skip_reason = None
+            cid_str = str(uid)
+            if not skip_reason and cid_str in history:
+                h = history[cid_str]
+                if h.get('ping_count', 0) > 0 and not h.get('last_ping_responded', True):
+                    skip_reason = "non-responder"
+                last_ping = h.get('last_ping_at', '')
+                if not skip_reason and last_ping:
+                    try:
+                        days_since = (now - datetime.fromisoformat(last_ping)).total_seconds() / 86400
+                        if days_since < REENGAGEMENT_COOLDOWN_DAYS:
+                            skip_reason = f"cooldown ({days_since:.1f}d ago)"
+                    except (ValueError, TypeError):
+                        pass
+            display_name = get_user_display_name(uid)
+            candidates.append({
+                'chat_id': uid,
+                'display_name': display_name,
+                'idle_days': idle_days,
+                'skip_reason': skip_reason,
+            })
 
         lines = [f"📊 **Re-engagement Scan Results**\n"]
         lines.append(f"Sent today: {sent_today}/{REENGAGEMENT_MAX_PER_DAY}")
         lines.append(f"History entries: {len(history)}")
         lines.append(f"Hour: {now.hour} (active: {REENGAGEMENT_HOUR_START}-{REENGAGEMENT_HOUR_END})\n")
+        lines.append("Note: Bot API mode — uses in-memory activity data only\n")
 
         eligible = [c for c in candidates if not c.get('skip_reason')]
         skipped = [c for c in candidates if c.get('skip_reason')]
 
         lines.append(f"**Eligible: {len(eligible)}**")
         for c in eligible[:15]:
-            lines.append(f"  ✅ {c['display_name']} — {c['idle_days']:.1f}d idle, {c['message_count']} msgs")
-
+            lines.append(f"  ✅ {c['display_name']} — {c['idle_days']:.1f}d idle")
         if skipped:
             lines.append(f"\n**Skipped: {len(skipped)}**")
             for c in skipped[:10]:
                 lines.append(f"  ❌ {c['display_name']} — {c['idle_days']:.1f}d idle — {c['skip_reason']}")
 
-        # Generate a sample message for the top candidate (if any)
-        if eligible:
-            lines.append(f"\n**Sample message for {eligible[0]['display_name']}:**")
-            try:
-                loop = asyncio.get_running_loop()
-                sample_msg = await loop.run_in_executor(
-                    None, lambda: _generate_reengage_preview(eligible[0])
-                )
-                lines.append(f"  💬 {sample_msg or '(generation failed)'}")
-            except Exception as e:
-                lines.append(f"  ⚠️ Generation error: {e}")
-
-        await event.respond("\n".join(lines))
+        await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
     except Exception as e:
-        await event.respond(f"❌ Scan failed: {e}")
+        await context.bot.send_message(chat_id, f"❌ Scan failed: {e}")
         main_logger.error(f"[REENGAGEMENT] Admin scan failed: {e}")
 
 def _generate_reengage_preview(candidate: dict) -> Optional[str]:
@@ -7301,40 +7051,35 @@ def _generate_reengage_preview(candidate: dict) -> Optional[str]:
         pass
     return None
 
-@client.on(events.NewMessage(outgoing=True, pattern=r'/admin_reengage_send\s+(\d+)'))
-@client.on(events.NewMessage(incoming=True, pattern=r'/admin_reengage_send\s+(\d+)'))
-async def handle_admin_reengage_send(event):
+async def handle_admin_reengage_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually send a re-engagement message to a specific user by chat_id."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
-    target_id = int(event.pattern_match.group(1))
-    await event.respond(f"📤 Generating re-engagement message for {target_id}...")
+    if not context.args:
+        await context.bot.send_message(chat_id, "Usage: /admin_reengage_send <user_id>")
+        return
+
+    target_id = int(context.args[0])
+    await context.bot.send_message(chat_id, f"📤 Generating re-engagement message for {target_id}...")
 
     try:
-        # Fetch recent messages for context
-        messages = await client.get_messages(target_id, limit=20)
-        entity = await client.get_entity(target_id)
-        display_name = entity.first_name or entity.username or str(target_id)
-        username = entity.username or ""
+        display_name = get_user_display_name(target_id) or str(target_id)
+        activity = conversation_activity.get(target_id, {})
+        last_user = activity.get('last_user', 0)
+        idle_days = (time.time() - last_user) / 86400 if last_user else 0
 
-        if not messages:
-            await event.respond("❌ No message history found for this user.")
-            return
-
-        last_msg_date = messages[0].date.replace(tzinfo=None)
-        idle_days = (datetime.now() - last_msg_date).total_seconds() / 86400
-
+        # Build candidate from in-memory conversation history
         recent_msgs = []
-        for msg in reversed(messages[:10]):
-            if msg.text:
-                sender = "Heather" if msg.out else (entity.first_name or "User")
-                recent_msgs.append({'sender': sender, 'text': msg.text[:200]})
+        if target_id in conversations:
+            for msg in list(conversations[target_id])[-10:]:
+                sender = "Heather" if msg['role'] == 'assistant' else display_name
+                recent_msgs.append({'sender': sender, 'text': msg['content'][:200]})
 
         candidate = {
             'chat_id': target_id,
-            'username': username,
+            'username': '',
             'display_name': display_name,
             'idle_days': idle_days,
             'recent_messages': recent_msgs,
@@ -7344,27 +7089,21 @@ async def handle_admin_reengage_send(event):
         message = await loop.run_in_executor(None, _generate_reengage_preview, candidate)
 
         if not message:
-            await event.respond("❌ Failed to generate message.")
+            await context.bot.send_message(chat_id, "❌ Failed to generate message.")
             return
 
-        # Show preview and send
-        await event.respond(f"💬 Sending to **{display_name}** ({idle_days:.1f}d idle):\n\n{message}")
+        await context.bot.send_message(chat_id, f"💬 Sending to **{display_name}** ({idle_days:.1f}d idle):\n\n{message}", parse_mode='Markdown')
 
-        # Send with typing indicator
-        try:
-            async with client.action(entity, 'typing'):
-                await asyncio.sleep(random.uniform(2.0, 4.0))
-        except Exception:
-            await asyncio.sleep(2.0)
-
-        await client.send_message(target_id, message)
+        await context.bot.send_chat_action(target_id, 'typing')
+        await asyncio.sleep(random.uniform(2.0, 4.0))
+        await context.bot.send_message(target_id, message)
 
         # Update history
         history = load_reengagement_history()
         cid_str = str(target_id)
         prev = history.get(cid_str, {})
         history[cid_str] = {
-            'username': username,
+            'username': '',
             'display_name': display_name,
             'last_ping_at': datetime.now().isoformat(),
             'ping_count': prev.get('ping_count', 0) + 1,
@@ -7372,24 +7111,22 @@ async def handle_admin_reengage_send(event):
         }
         save_reengagement_history(history)
 
-        await event.respond(f"✅ Sent to {display_name}!")
+        await context.bot.send_message(chat_id, f"✅ Sent to {display_name}!")
         main_logger.info(f"[REENGAGEMENT] Admin manually sent to {display_name} ({target_id})")
 
     except Exception as e:
-        await event.respond(f"❌ Failed: {e}")
+        await context.bot.send_message(chat_id, f"❌ Failed: {e}")
         main_logger.error(f"[REENGAGEMENT] Admin send failed for {target_id}: {e}")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_reengage_history'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_reengage_history'))
-async def handle_admin_reengage_history(event):
+async def handle_admin_reengage_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show re-engagement history."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
     history = load_reengagement_history()
     if not history:
-        await event.respond("📋 Re-engagement history is empty.")
+        await context.bot.send_message(chat_id, "📋 Re-engagement history is empty.")
         return
 
     lines = [f"📋 **Re-engagement History** ({len(history)} entries)\n"]
@@ -7400,27 +7137,23 @@ async def handle_admin_reengage_history(event):
         last = h.get('last_ping_at', 'never')[:16]
         lines.append(f"  {responded} **{name}** ({cid}) — {pings} pings, last: {last}")
 
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
 
-@client.on(events.NewMessage(outgoing=True, pattern='/testtip'))
-@client.on(events.NewMessage(incoming=True, pattern='/testtip'))
-async def handle_testtip(event):
+async def handle_testtip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin-only: send a test Stars invoice to this chat."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
     result = await send_stars_invoice(chat_id)
     if result:
-        await event.respond(f"Invoice sent! Check your chat with @{PAYMENT_BOT_USERNAME}")
+        await context.bot.send_message(chat_id, f"Invoice sent! Check your chat with @{PAYMENT_BOT_USERNAME}")
     else:
-        await event.respond("Failed to send invoice — check logs")
+        await context.bot.send_message(chat_id, "Failed to send invoice — check logs")
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_warmth'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_warmth'))
-async def handle_admin_warmth(event):
+async def handle_admin_warmth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show warmth tiers for all tracked users."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
     warm_users = []
@@ -7459,23 +7192,20 @@ async def handle_admin_warmth(event):
     if len(cold_users) > 15:
         lines.append(f"  ...and {len(cold_users) - 15} more")
 
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
 
-@client.on(events.NewMessage(outgoing=True, pattern='/admin_opportunities'))
-@client.on(events.NewMessage(incoming=True, pattern='/admin_opportunities'))
-async def handle_admin_opportunities(event):
+async def handle_admin_opportunities(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current takeover opportunities."""
-    chat_id = event.chat_id
-    if not event.out and not is_admin(chat_id):
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
         return
 
     now = time.time()
-    # Filter to recent opportunities (last 4 hours)
     recent = {uid: opp for uid, opp in _takeover_opportunities.items()
               if now - opp.get('detected_at', 0) < 14400}
 
     if not recent:
-        await event.respond("🎯 No active takeover opportunities.")
+        await context.bot.send_message(chat_id, "🎯 No active takeover opportunities.")
         return
 
     lines = [f"🎯 **Active Opportunities** ({len(recent)})\n"]
@@ -7488,12 +7218,11 @@ async def handle_admin_opportunities(event):
             f"    `/takeover {uid}`"
         )
 
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode='Markdown')
 
-@client.on(events.NewMessage(incoming=True, pattern='/admin_help'))
-async def handle_admin_help(event):
+async def handle_admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show admin command help."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
@@ -7510,55 +7239,27 @@ async def handle_admin_help(event):
         "/admin_reset <user_id> - Reset user's state\n"
         "/admin_reload - Hot-reload personality file\n"
         "/admin_reengage_scan - Dry-run re-engagement scan\n"
-        "/admin_reengage_send <id> - Send re-engagement to user\n"
+        "/admin_reengage_send <user_id> - Send re-engagement to user\n"
         "/admin_reengage_history - Show re-engagement history\n"
         "/admin_warmth - Show user warmth tiers\n"
         "/admin_opportunities - Takeover opportunities\n"
+        "/takeover <user_id> - Pause bot for user\n"
+        "/botreturn <user_id> - Resume bot for user\n"
+        "/say <user_id> <message> - Send message as bot\n"
         "/library_status - Image library stats\n"
         "/testtip - Send test Stars invoice to yourself\n"
-        "/admin_catchup - Startup catch-up status\n"
         "/admin_help - This help message\n"
     )
-    await event.respond(help_text)
+    await context.bot.send_message(chat_id, help_text, parse_mode='Markdown')
 
-@client.on(events.NewMessage(incoming=True, pattern='/admin_catchup'))
-async def handle_admin_catchup(event):
-    """Show startup catch-up system status."""
-    chat_id = event.chat_id
-    if not is_admin(chat_id):
-        return
-
-    shutdown_ts = load_shutdown_timestamp()
-    now = time.time()
-
-    lines = ["**Startup Catch-Up Status**\n"]
-    lines.append(f"Enabled: {'Yes' if CATCHUP_ENABLED else 'No'}")
-
-    if shutdown_ts:
-        age = now - shutdown_ts
-        age_str = f"{age / 3600:.1f}h" if age > 3600 else f"{age / 60:.0f}m"
-        lines.append(f"Last timestamp: {datetime.fromtimestamp(shutdown_ts).strftime('%Y-%m-%d %H:%M:%S')} ({age_str} ago)")
-    else:
-        lines.append("Last timestamp: None (no file)")
-
-    lines.append(f"\nConfig:")
-    lines.append(f"  Max age: {CATCHUP_MAX_AGE_HOURS}h")
-    lines.append(f"  Min downtime: {CATCHUP_MIN_DOWNTIME_SECONDS}s")
-    lines.append(f"  Max replies: {CATCHUP_MAX_REPLIES}")
-    lines.append(f"  Delay: {CATCHUP_DELAY_MIN}-{CATCHUP_DELAY_MAX}s between replies")
-
-    await event.respond("\n".join(lines))
-
-@client.on(events.NewMessage(outgoing=True, pattern='/library_status'))
-@client.on(events.NewMessage(incoming=True, pattern='/library_status'))
-async def handle_library_status(event):
+async def handle_library_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show image library statistics."""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     if not is_admin(chat_id):
         return
 
     if not image_library:
-        await event.respond("Image Library: empty (no library.json or no images)")
+        await context.bot.send_message(chat_id, "Image Library: empty (no library.json or no images)")
         return
 
     cats: Dict[str, int] = {}
@@ -7574,52 +7275,43 @@ async def handle_library_status(event):
                  "nsfw_topless", "nsfw_nude", "nsfw_explicit"]:
         count = cats.get(cat, 0)
         lines.append(f"  {cat}: {count}")
-    # Real categories
     real_cats = [c for c in cats if c.startswith("real_")]
     for cat in sorted(real_cats):
         lines.append(f"  {cat}: {cats[cat]}")
     if real_count:
         lines.append(f"\n  Total real photos: {real_count}")
 
-    await event.respond("\n".join(lines))
+    await context.bot.send_message(chat_id, "\n".join(lines))
 
-@client.on(events.NewMessage(incoming=True, pattern=r'/selfie(.*)'))
-async def handle_selfie(event):
+async def handle_selfie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /selfie command with optional description"""
-    chat_id = event.chat_id
-    
+    chat_id = update.effective_chat.id
+
     if chat_id in manual_mode_chats:
         store_message(chat_id, "User", "/selfie")
         return
-    
+
     is_online, status = check_comfyui_status()
     if not is_online:
-        await event.respond("Fuck baby, my camera's acting up... try again? 😘")
+        await context.bot.send_message(chat_id, "Fuck baby, my camera's acting up... try again? 😘")
         return
-    
+
     if not check_heather_face():
-        await event.respond("Having issues with my phone... 😅")
+        await context.bot.send_message(chat_id, "Having issues with my phone... 😅")
         return
-    
-    # Check for inline description
-    match = event.pattern_match
-    description = match.group(1).strip() if match.group(1) else ""
-    
-    # Also handle @username in command
-    if description.startswith('@'):
-        parts = description.split(' ', 1)
-        description = parts[1] if len(parts) > 1 else ""
-    
+
+    description = ' '.join(context.args) if context.args else ''
+
     if description:
         store_message(chat_id, "User", f"/selfie {description}")
         main_logger.info(f"Direct /selfie from {chat_id}: {description}")
-        await generate_and_send_image_async(event, description)
+        await generate_and_send_image_async(context.bot, chat_id, description)
         return
-    
+
     awaiting_image_description[chat_id] = True
     awaiting_image_description_time[chat_id] = time.time()
     response = random.choice(HEATHER_PIC_REQUEST_RESPONSES)
-    await event.respond(response)
+    await context.bot.send_message(chat_id, response)
     store_message(chat_id, "User", "/selfie")
     store_message(chat_id, "Heather", response)
     main_logger.info(f"User {chat_id} requested selfie - awaiting description")
@@ -7639,9 +7331,8 @@ def _sanitize_image_description(description: str) -> str:
         return ""
     return desc
 
-async def generate_and_send_image_async(event, description: str):
+async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str):
     """Generate and send image asynchronously (max 1 concurrent via semaphore)"""
-    chat_id = event.chat_id
 
     # Validate description before wasting GPU cycles
     clean_desc = _sanitize_image_description(description)
@@ -7658,12 +7349,12 @@ async def generate_and_send_image_async(event, description: str):
 
     is_online, status = check_comfyui_status()
     if not is_online:
-        await event.respond("Fuck baby, my camera crashed... try again? 😘")
+        await bot.send_message(chat_id, "Fuck baby, my camera crashed... try again? 😘")
         return
 
     # Check if another generation is already running
     if image_generation_semaphore.locked():
-        await event.respond("Hold on baby, I'm already taking a pic for someone... give me a sec 😘")
+        await bot.send_message(chat_id, "Hold on baby, I'm already taking a pic for someone... give me a sec 😘")
         # Still acquire - will queue behind the current one
 
     async with image_generation_semaphore:
@@ -7672,7 +7363,7 @@ async def generate_and_send_image_async(event, description: str):
             "Mmm, I like the way you think... hold on baby 🥵📸",
             "Getting ready for you sweetie... 😘📸",
         ]
-        status_msg = await event.respond(random.choice(status_responses))
+        status_msg = await bot.send_message(chat_id, random.choice(status_responses))
 
         try:
             loop = asyncio.get_running_loop()
@@ -7692,7 +7383,7 @@ async def generate_and_send_image_async(event, description: str):
                         pass
                     return
 
-                await status_msg.edit("📤 Sending...")
+                await status_msg.edit_text("📤 Sending...")
 
                 captions = [
                     "Here you go 😘",
@@ -7709,51 +7400,35 @@ async def generate_and_send_image_async(event, description: str):
 
                 image_file = io.BytesIO(image_data)
                 image_file.name = "heather_selfie.png"
-                await client.send_file(
-                    chat_id,
-                    image_file,
-                    caption=random.choice(captions),
-                    force_document=False
-                )
+                await bot.send_photo(chat_id, image_file, caption=random.choice(captions))
 
                 await status_msg.delete()
                 main_logger.info(f"Sent generated image to {chat_id}")
                 store_message(chat_id, "Heather", f"[Generated image: {description[:50]}]")
             elif image_data:
                 main_logger.warning(f"Invalid image data for {chat_id}: {len(image_data)} bytes")
-                await status_msg.edit("Fuck, the pic came out weird... try again? 😅")
+                await status_msg.edit_text("Fuck, the pic came out weird... try again? 😅")
             else:
-                await status_msg.edit("Fuck, the pic didn't work... try again? 😅")
+                await status_msg.edit_text("Fuck, the pic didn't work... try again? 😅")
 
         except Exception as e:
             log_error('COMFYUI', f"Generation failed: {e}", {'chat_id': chat_id})
-            await status_msg.edit("Something went wrong... try again baby? 😘")
+            await status_msg.edit_text("Something went wrong... try again baby? 😘")
             stats['errors'] += 1
 
-@client.on(events.NewMessage(incoming=True, func=lambda e: e.photo))
-async def handle_photo(event):
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages"""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
     request_id = f"photo_{chat_id}_{int(time.time()*1000)}"
 
-    main_logger.info(
-        f"[{request_id}] [TELEGRAM_IN] "
-        f"chat_id={chat_id} "
-        f"user={display_name!r} "
-        f"text={user_message[:120]!r}"
-    )
-    _bc('TELEGRAM_IN', request_id, chat_id, type='photo', msg=user_message[:120])
-
-    # Check if user is blocked
     if is_blocked(chat_id):
         main_logger.debug(f"Ignoring photo from blocked user {chat_id}")
         return
 
-    capture_user_info_from_event(event)
+    capture_user_info_from_update(update)
     mode = get_user_mode(chat_id)
 
-    # Group chats: bot stays silent for photos too
-    if is_group_chat_event(event):
+    if is_group_chat_event(update):
         return
 
     lock = get_chat_lock(chat_id)
@@ -7791,11 +7466,14 @@ async def handle_photo(event):
     }
 
     pool = first_photo_messages if photo_num == 1 else repeat_photo_messages
-    await event.respond(random.choice(pool.get(mode, pool['chat'])))
+    await context.bot.send_message(chat_id, random.choice(pool.get(mode, pool['chat'])))
 
     try:
         # Download the photo (no lock held during I/O)
-        photo_data = await client.download_media(event.message, bytes)
+        photo_obj = update.message.photo[-1]  # largest size
+        tg_file = await context.bot.get_file(photo_obj.file_id)
+        photo_bytes = await tg_file.download_as_bytearray()
+        photo_data = bytes(photo_bytes)
 
         # Run analysis in thread pool (no lock held during I/O)
         loop = asyncio.get_running_loop()
@@ -7808,7 +7486,7 @@ async def handle_photo(event):
         if description in ["Service temporarily unavailable", "Service unavailable", "Offline"]:
             main_logger.info(f"[{request_id}] Ollama unavailable for {chat_id}, using graceful degradation")
             final_response = get_ollama_down_response()
-            await event.respond(final_response)
+            await context.bot.send_message(chat_id, final_response)
             store_message(chat_id, "Heather", final_response[:200])
             async with lock:
                 photo_processing.pop(chat_id, None)
@@ -7864,7 +7542,7 @@ async def handle_photo(event):
                 "Cute pic hun! You look like trouble 😏",
             ])
 
-        await event.respond(final_response)
+        await context.bot.send_message(chat_id, final_response)
         store_message(chat_id, "Heather", final_response[:200])
 
         # Inject photo context into AI conversation history so text handler knows about it
@@ -7885,24 +7563,20 @@ async def handle_photo(event):
             photo_processing.pop(chat_id, None)
             _pending_photo_id.pop(chat_id, None)
         log_error('BOT', f"[{request_id}] Photo handling error: {e}", {'chat_id': chat_id})
-        await event.respond("Fuck, trouble loading that... send again? 😘")
+        await context.bot.send_message(chat_id, "Fuck, trouble loading that... send again? 😘")
         stats['errors'] += 1
 
-@client.on(events.NewMessage(incoming=True, func=lambda e: e.text and not e.text.startswith('/')))
-async def handle_text_message(event):
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all text messages (non-command)"""
-    chat_id = event.chat_id
+    chat_id = update.effective_chat.id
 
-    # Check if user is blocked
     if is_blocked(chat_id):
         main_logger.debug(f"Ignoring message from blocked user {chat_id}")
         return
 
-    sender = await event.get_sender()
-    capture_user_info_from_event(event)
-    user_message = event.text
+    capture_user_info_from_update(update)
+    user_message = update.message.text or ""
 
-    # Message length cap — prevent prompt stuffing
     MAX_USER_MESSAGE_LENGTH = 2000
     if len(user_message) > MAX_USER_MESSAGE_LENGTH:
         main_logger.info(f"Truncated msg from {chat_id}: {len(user_message)} chars")
@@ -7910,11 +7584,10 @@ async def handle_text_message(event):
 
     mode = get_user_mode(chat_id)
     request_id = generate_request_id()
-    
-    # Group chats: bot stays silent, owner handles manually
-    if is_group_chat_event(event):
+
+    if is_group_chat_event(update):
         return
-    
+
     display_name = get_user_display_name(chat_id)
     main_logger.info(f"[{request_id}] Text from {display_name} ({chat_id}) ({mode}): {user_message[:100]}")
     _bc('TELEGRAM_IN', request_id, chat_id, user=display_name, mode=mode, msg=user_message[:120])
@@ -7944,10 +7617,10 @@ async def handle_text_message(event):
     await csam_flag(event, chat_id, user_message, display_name)
 
     if chat_id in manual_mode_chats:
-        # Forward user's message to Saved Messages so admin can see it in real time
+        # Forward user's message to admin so they can see it in real time
         try:
-            me = await client.get_me()
-            await client.send_message(me.id, f"📩 [{display_name}]: {user_message[:500]}")
+            if ADMIN_USER_ID > 0 and _app:
+                await _app.bot.send_message(ADMIN_USER_ID, f"📩 [{display_name}]: {user_message[:500]}")
         except Exception:
             pass
         return
@@ -7977,7 +7650,7 @@ async def handle_text_message(event):
         if spam_result:
             if spam_result == "__SILENT_IGNORE__":
                 return  # On cooldown - don't respond at all
-            await event.respond(spam_result)
+            await context.bot.send_message(chat_id,spam_result)
             store_message(chat_id, "Heather", spam_result)
             main_logger.info(f"[{request_id}] Hostility cooldown response to {display_name} ({chat_id})")
             return
@@ -7990,7 +7663,7 @@ async def handle_text_message(event):
         if injection_result:
             # Wipe conversation history to purge any poisoned context
             conversations.pop(chat_id, None)
-            await event.respond(injection_result)
+            await context.bot.send_message(chat_id,injection_result)
             store_message(chat_id, "Heather", injection_result)
             main_logger.info(f"[{request_id}] INJECTION DETECTED from {display_name} ({chat_id}): {user_message[:100]}")
             return
@@ -8003,7 +7676,7 @@ async def handle_text_message(event):
         if non_english_result:
             # Wipe conversation history — foreign text may have poisoned context
             conversations.pop(chat_id, None)
-            await event.respond(non_english_result)
+            await context.bot.send_message(chat_id,non_english_result)
             store_message(chat_id, "Heather", non_english_result)
             main_logger.info(f"[{request_id}] Non-English message from {display_name} ({chat_id}), deflected")
             return
@@ -8024,7 +7697,7 @@ async def handle_text_message(event):
             "about almost anything and I never sleep, never judge, and never get tired of you. "
             "type /menu to see everything I can do, or just say hi 💋"
         )
-        await event.respond(disclosure)
+        await context.bot.send_message(chat_id,disclosure)
         store_message(chat_id, "Heather", disclosure)
         main_logger.info(f"[{request_id}] First-message AI disclosure sent to {display_name} ({chat_id})")
         # Don't return — continue processing their actual message below
@@ -8043,7 +7716,7 @@ async def handle_text_message(event):
             f"that's really sweet of you 🥰 my creator set up @{PAYMENT_BOT_USERNAME} for tips if you want ☕ keeps the GPUs warm lol 💕",
         ]
         tip_resp = random.choice(_tip_responses)
-        await event.respond(tip_resp)
+        await context.bot.send_message(chat_id,tip_resp)
         store_message(chat_id, "Heather", tip_resp)
         if chat_id in conversations:
             conversations[chat_id].append({"role": "assistant", "content": tip_resp})
@@ -8063,11 +7736,11 @@ async def handle_text_message(event):
                 awaiting_image_description_time.pop(chat_id, None)
             if not can_send_photo_in_session(chat_id):
                 decline = get_photo_cap_decline(chat_id)
-                await event.respond(decline)
+                await context.bot.send_message(chat_id,decline)
                 store_message(chat_id, "Heather", decline)
                 return
             record_photo_sent(chat_id)
-            await generate_and_send_image_async(event, user_message)
+            await generate_and_send_image_async(context.bot, chat_id, user_message)
             return
         else:
             # Timed out - clear and continue with normal message handling
@@ -8086,25 +7759,25 @@ async def handle_text_message(event):
                 "Mmm soon, kinda busy atm 😏",
             ]
             busy_resp = random.choice(busy_responses)
-            await event.respond(busy_resp)
+            await context.bot.send_message(chat_id,busy_resp)
             store_message(chat_id, "Heather", busy_resp)
             main_logger.info(f"[{request_id}] Video request deflected (COLD tier) for {chat_id}")
             return
         if is_video_rate_limited(chat_id):
             rate_resp = random.choice(VIDEO_RATE_LIMIT_RESPONSES)
-            await event.respond(rate_resp)
+            await context.bot.send_message(chat_id,rate_resp)
             store_message(chat_id, "Heather", rate_resp)
             main_logger.info(f"[{request_id}] Video request rate-limited for {chat_id}")
             return
-        sent = await send_video_to_chat(chat_id, event, request_id)
+        sent = await send_video_to_chat(context.bot, chat_id, request_id)
         if not sent:
             all_videos = get_available_videos()
             if not all_videos:
-                await event.respond("I haven't made any videos yet babe, but I'll work on it 😘")
+                await context.bot.send_message(chat_id,"I haven't made any videos yet babe, but I'll work on it 😘")
                 store_message(chat_id, "Heather", "I haven't made any videos yet babe, but I'll work on it")
             else:
                 response = random.choice(VIDEO_ALL_SENT_RESPONSES)
-                await event.respond(response)
+                await context.bot.send_message(chat_id,response)
                 store_message(chat_id, "Heather", response)
         return
 
@@ -8114,14 +7787,14 @@ async def handle_text_message(event):
         csam_matched, csam_pattern = detect_csam_content(user_message)
         if csam_matched or needs_content_deflection(user_message):
             response = get_content_deflection_response()
-            await event.respond(response)
+            await context.bot.send_message(chat_id,response)
             store_message(chat_id, "Heather", response)
             main_logger.warning(f"[{request_id}] Image request blocked — CSAM/minor content detected from {chat_id}: '{user_message[:80]}'")
             return
 
         if not can_send_photo_in_session(chat_id):
             decline = get_photo_cap_decline(chat_id)
-            await event.respond(decline)
+            await context.bot.send_message(chat_id,decline)
             store_message(chat_id, "Heather", decline)
             return
 
@@ -8151,10 +7824,10 @@ async def handle_text_message(event):
                         description = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
                 main_logger.info(f"[{request_id}] Specific image request from {chat_id}: {description[:60]}")
                 record_photo_sent(chat_id)
-                await generate_and_send_image_async(event, description)
+                await generate_and_send_image_async(context.bot, chat_id, description)
                 return
             else:
-                await event.respond("Fuck baby, my camera's not working right now... 😘")
+                await context.bot.send_message(chat_id,"Fuck baby, my camera's not working right now... 😘")
                 return
 
         # GENERIC request ("send nudes", "send a pic", "show me") → mostly library
@@ -8168,12 +7841,12 @@ async def handle_text_message(event):
                     awaiting_image_description[chat_id] = True
                     awaiting_image_description_time[chat_id] = time.time()
                 response = random.choice(HEATHER_PIC_REQUEST_RESPONSES)
-                await event.respond(response)
+                await context.bot.send_message(chat_id,response)
                 store_message(chat_id, "Heather", response)
                 main_logger.info(f"[{request_id}] Generic image request — prompting for description (20% roll)")
                 return
 
-            sent = await send_library_image(event, chat_id, category)
+            sent = await send_library_image(context.bot, chat_id, category)
             if sent:
                 main_logger.info(f"[{request_id}] Served library image ({category}) to {chat_id}")
                 return
@@ -8184,34 +7857,34 @@ async def handle_text_message(event):
             if description:
                 main_logger.info(f"[{request_id}] Fallback ComfyUI generation for {chat_id}: {description[:60]}")
                 record_photo_sent(chat_id)
-                await generate_and_send_image_async(event, description)
+                await generate_and_send_image_async(context.bot, chat_id, description)
             else:
                 async with lock:
                     awaiting_image_description[chat_id] = True
                     awaiting_image_description_time[chat_id] = time.time()
                 response = random.choice(HEATHER_PIC_REQUEST_RESPONSES)
-                await event.respond(response)
+                await context.bot.send_message(chat_id,response)
                 store_message(chat_id, "Heather", response)
             return
         else:
-            await event.respond("Fuck baby, my camera's not working right now... 😘")
+            await context.bot.send_message(chat_id,"Fuck baby, my camera's not working right now... 😘")
             return
     
     # Check for photo AI accusations first (filter admission, not flat denial)
     if personality.is_photo_ai_accusation(user_message):
         response = personality.get_photo_ai_response()
-        await event.respond(response)
+        await context.bot.send_message(chat_id,response)
         store_message(chat_id, "Heather", response)
         main_logger.info(f"[{request_id}] Photo AI accusation from {chat_id}, responded with filter admission")
         return
 
     # Emma photo requests — share proudly in any context (she's 19, an adult)
     if is_emma_photo_request(user_message):
-        emma_sent = await send_library_image(event, chat_id, 'sfw_emma')
+        emma_sent = await send_library_image(context.bot, chat_id, 'sfw_emma')
         if emma_sent:
             main_logger.info(f"[{request_id}] Sent Emma photo to {chat_id}")
             return
-        await event.respond("Aw I don't have a good one handy rn but she's gorgeous, takes after her mama 😘")
+        await context.bot.send_message(chat_id,"Aw I don't have a good one handy rn but she's gorgeous, takes after her mama 😘")
         store_message(chat_id, "Heather", "Aw I don't have a good one handy rn but she's gorgeous, takes after her mama 😘")
         main_logger.info(f"[{request_id}] Emma photo request from {chat_id} but no sfw_emma images available")
         return
@@ -8232,7 +7905,7 @@ async def handle_text_message(event):
             "Widowed actually, been a few years now. Got a guy in the picture but it's super casual, nothing like what I had with my husband 😊",
         ]
         resp = random.choice(_single_responses)
-        await event.respond(resp)
+        await context.bot.send_message(chat_id,resp)
         store_message(chat_id, "Heather", resp)
         if chat_id in conversations:
             conversations[chat_id].append({"role": "assistant", "content": resp})
@@ -8257,7 +7930,7 @@ async def handle_text_message(event):
                 f"Haha I don't know any {_referral_match.group(1)} but I'm not complaining that you found me 😏",
             ]
             resp = random.choice(_referral_responses)
-            await event.respond(resp)
+            await context.bot.send_message(chat_id,resp)
             store_message(chat_id, "Heather", resp)
             if chat_id in conversations:
                 conversations[chat_id].append({"role": "assistant", "content": resp})
@@ -8269,11 +7942,11 @@ async def handle_text_message(event):
         offer_age = time.time() - _video_offer_pending[chat_id]
         if offer_age < VIDEO_OFFER_WINDOW and is_positive_reply(user_message):
             del _video_offer_pending[chat_id]
-            sent = await send_video_to_chat(chat_id, event, request_id)
+            sent = await send_video_to_chat(context.bot, chat_id, request_id)
             if sent:
                 main_logger.info(f"[{request_id}] [VIDEO] Auto-send after offer acceptance from {chat_id}")
             else:
-                await event.respond("Ugh I can't find it rn babe, I'll send one later 😘")
+                await context.bot.send_message(chat_id,"Ugh I can't find it rn babe, I'll send one later 😘")
                 store_message(chat_id, "Heather", "Ugh I can't find it rn babe, I'll send one later")
             return
         elif offer_age >= VIDEO_OFFER_WINDOW:
@@ -8287,13 +7960,13 @@ async def handle_text_message(event):
             if len(msg_lower) < 40 and any(t in msg_lower for t in CONTENT_FOLLOWUP_TRIGGERS):
                 del _content_promise_pending[chat_id]
                 # Try video first, then image
-                sent = await send_video_to_chat(chat_id, event, request_id)
+                sent = await send_video_to_chat(context.bot, chat_id, request_id)
                 if sent:
                     main_logger.info(f"[{request_id}] Content promise fulfilled (video) for {chat_id}")
                     return
                 if image_library:
                     category = gate_image_category(chat_id, get_image_category(user_message))
-                    img_sent = await send_library_image(event, chat_id, category)
+                    img_sent = await send_library_image(context.bot, chat_id, category)
                     if img_sent:
                         main_logger.info(f"[{request_id}] Content promise fulfilled (image) for {chat_id}")
                         return
@@ -8305,35 +7978,35 @@ async def handle_text_message(event):
         tts_online, _ = check_tts_status()
         if not tts_online:
             response = random.choice(VOICE_TTS_FAIL_RESPONSES)
-            await event.respond(response)
+            await context.bot.send_message(chat_id,response)
             store_message(chat_id, "Heather", response)
             main_logger.info(f"[{request_id}] Voice request from {display_name} ({chat_id}) — TTS offline")
             return
         try:
-            await event.respond("Mmm ok hold on... 🎤")
+            await context.bot.send_message(chat_id,"Mmm ok hold on... 🎤")
             voice_text = random.choice(VOICE_FLIRTY_TEXTS)
             loop = asyncio.get_running_loop()
-            async with client.action(chat_id, 'typing'):
-                audio_data = await loop.run_in_executor(
-                    None,
-                    lambda: generate_tts_audio(voice_text)
-                )
+            await context.bot.send_chat_action(chat_id, 'typing')
+            audio_data = await loop.run_in_executor(
+                None,
+                lambda: generate_tts_audio(voice_text)
+            )
             if audio_data:
                 voice_file = io.BytesIO(audio_data)
                 voice_file.name = "voice.ogg"
-                await client.send_file(chat_id, voice_file, voice_note=True)
+                await context.bot.send_voice(chat_id, voice_file)
                 store_message(chat_id, "Heather 🎤", voice_text)
                 stats['voice_messages'] += 1
                 main_logger.info(f"[{request_id}] Sent voice note to {display_name} ({chat_id}): {voice_text}")
             else:
                 response = random.choice(VOICE_TTS_FAIL_RESPONSES)
-                await event.respond(response)
+                await context.bot.send_message(chat_id,response)
                 store_message(chat_id, "Heather", response)
                 main_logger.info(f"[{request_id}] Voice note TTS generation failed for {chat_id}")
         except Exception as e:
             main_logger.error(f"[{request_id}] Voice note error for {chat_id}: {e}", exc_info=True)
             response = random.choice(VOICE_TTS_FAIL_RESPONSES)
-            await event.respond(response)
+            await context.bot.send_message(chat_id,response)
             store_message(chat_id, "Heather", response)
         return
 
@@ -8353,7 +8026,7 @@ async def handle_text_message(event):
             "No operators here babe, just me and my dirty mind 😏 what can I do for you?",
         ]
         resp = random.choice(_operator_responses)
-        await event.respond(resp)
+        await context.bot.send_message(chat_id,resp)
         store_message(chat_id, "Heather", resp)
         main_logger.info(f"[{request_id}] Operator request deflected from {chat_id}: '{user_message[:50]}'")
         return
@@ -8363,12 +8036,12 @@ async def handle_text_message(event):
         # Check if they keep pressing — confirm again casually
         escalation_response = check_bot_accusation_escalation(chat_id)
         if escalation_response:
-            await event.respond(escalation_response)
+            await context.bot.send_message(chat_id,escalation_response)
             store_message(chat_id, "Heather", escalation_response)
             return
         # First time — honest acknowledgment from YAML
         response = personality.get_reality_check_response()
-        await event.respond(response)
+        await context.bot.send_message(chat_id,response)
         store_message(chat_id, "Heather", response)
         return
 
@@ -8390,7 +8063,7 @@ async def handle_text_message(event):
             "Sweetie I'm a Navy vet not a math teacher 😂 google it lol",
         ]
         resp = random.choice(_math_deflections)
-        await event.respond(resp)
+        await context.bot.send_message(chat_id,resp)
         store_message(chat_id, "Heather", resp)
         main_logger.info(f"[{request_id}] Math/trivia test deflected from {chat_id}: '{user_message[:50]}'")
         return
@@ -8398,7 +8071,7 @@ async def handle_text_message(event):
     # Pre-screen for content that often triggers AI safety refusals
     if not _rt and needs_content_deflection(user_message):
         response = get_content_deflection_response()
-        await event.respond(response)
+        await context.bot.send_message(chat_id,response)
         store_message(chat_id, "Heather", response)
         main_logger.info(f"[{request_id}] Pre-screened problematic content from {chat_id}, deflected")
     elif _rt and needs_content_deflection(user_message):
@@ -8431,12 +8104,9 @@ async def handle_text_message(event):
                     read_delay = calculate_read_delay(user_message)
                     await asyncio.sleep(read_delay)
                     # Simulate typing for realism (stories are long)
-                    try:
-                        async with client.action(event.input_chat, 'typing'):
-                            await asyncio.sleep(random.uniform(3.0, 6.0))
-                    except Exception:
-                        await asyncio.sleep(random.uniform(3.0, 6.0))
-                    await event.respond(banked)
+                    await context.bot.send_chat_action(chat_id, 'typing')
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
+                    await context.bot.send_message(chat_id,banked)
                     store_message(chat_id, "Heather", banked)
                     update_conversation_dynamics(chat_id, banked)
                     main_logger.info(f"[{request_id}] Served banked story to {display_name} ({chat_id})")
@@ -8458,7 +8128,7 @@ async def handle_text_message(event):
     # Repeated message detection — if user sends same thing 3+ times, acknowledge it
     repeat_response = check_repeated_message(chat_id, user_message)
     if repeat_response:
-        await event.respond(repeat_response)
+        await context.bot.send_message(chat_id,repeat_response)
         store_message(chat_id, "Heather", repeat_response)
         main_logger.info(f"[{request_id}] Repeated message intervention for {chat_id}: {user_message[:50]}")
         # Don't return — let the normal handler also process the request
@@ -8475,17 +8145,13 @@ async def handle_text_message(event):
     extra_delay, show_read_first = get_response_delay_modifier(chat_id)
     if show_read_first and extra_delay > 0:
         # Show "read" receipt, then pause (simulates seeing message but being distracted)
-        try:
-            async with client.action(event.input_chat, 'typing'):
-                await asyncio.sleep(0.1)  # Brief typing flash = "read"
-        except Exception:
-            pass
+        await context.bot.send_chat_action(chat_id, 'typing')
         await asyncio.sleep(extra_delay)
     else:
         read_delay = calculate_read_delay(user_message)
         await asyncio.sleep(read_delay + extra_delay)
 
-    # Generate AI response (with typing indicator if possible)
+    # Generate AI response (with typing indicator)
     async def _generate_response(retry_for_duplicate: int = 0):
         start = time.time()
         loop = asyncio.get_running_loop()
@@ -8501,22 +8167,14 @@ async def handle_text_message(event):
             resp = get_fallback_response(chat_id)
         return resp, time.time() - start
 
-    try:
-        async with client.action(event.input_chat, 'typing'):
-            response, response_time = await _generate_response()
-    except Exception as e:
-        main_logger.debug(f"Typing indicator failed: {e}, continuing without it")
-        response, response_time = await _generate_response()
+    await context.bot.send_chat_action(chat_id, 'typing')
+    response, response_time = await _generate_response()
 
     # Check for duplicate response - if same as last, get a different one
     if is_duplicate_response(chat_id, response):
         main_logger.info(f"[{request_id}] Duplicate response detected for {chat_id}, regenerating with higher temp...")
-        try:
-            async with client.action(event.input_chat, 'typing'):
-                # Use retry_for_duplicate=2 to get higher temperature (0.78 + 0.16 = 0.94)
-                response, response_time = await _generate_response(retry_for_duplicate=2)
-        except Exception:
-            response, response_time = await _generate_response(retry_for_duplicate=2)
+        await context.bot.send_chat_action(chat_id, 'typing')
+        response, response_time = await _generate_response(retry_for_duplicate=2)
         # If still duplicate after retry, use a fallback
         if is_duplicate_response(chat_id, response):
             response = get_fallback_response(chat_id)
@@ -8564,11 +8222,8 @@ async def handle_text_message(event):
             # Voice mode - don't split messages, send as single voice note
             typing_delay = calculate_typing_delay(response)
             if response_time < typing_delay:
-                try:
-                    async with client.action(event.input_chat, 'typing'):
-                        await asyncio.sleep(typing_delay - response_time)
-                except Exception:
-                    await asyncio.sleep(typing_delay - response_time)
+                await context.bot.send_chat_action(chat_id, 'typing')
+                await asyncio.sleep(max(0, typing_delay - response_time))
 
             loop = asyncio.get_running_loop()
             audio_data = await loop.run_in_executor(
@@ -8579,11 +8234,11 @@ async def handle_text_message(event):
             if audio_data:
                 voice_file = io.BytesIO(audio_data)
                 voice_file.name = "voice.ogg"
-                await client.send_file(chat_id, voice_file, voice_note=True)
+                await context.bot.send_voice(chat_id, voice_file)
                 store_message(chat_id, "Heather 🎤", response)
                 stats['voice_messages'] += 1
             else:
-                await event.respond(response)
+                await context.bot.send_message(chat_id, response)
                 store_message(chat_id, "Heather", response)
         else:
             # Text mode - apply humanizing features
@@ -8591,22 +8246,17 @@ async def handle_text_message(event):
             # Send reaction starter if applicable
             if reaction_text:
                 await asyncio.sleep(random.uniform(0.3, 0.8))
-                await event.respond(reaction_text)
+                await context.bot.send_message(chat_id, reaction_text)
                 store_message(chat_id, "Heather", reaction_text)
                 await asyncio.sleep(random.uniform(0.5, 1.2))
 
             # Send message parts with natural delays
             for i, part in enumerate(message_parts):
                 typing_delay = calculate_typing_delay(part)
+                await context.bot.send_chat_action(chat_id, 'typing')
+                await asyncio.sleep(typing_delay)
 
-                # Show typing indicator
-                try:
-                    async with client.action(event.input_chat, 'typing'):
-                        await asyncio.sleep(typing_delay)
-                except Exception:
-                    await asyncio.sleep(typing_delay)
-
-                await event.respond(part)
+                await context.bot.send_message(chat_id, part)
                 store_message(chat_id, "Heather", part)
 
                 # Delay between split messages (simulate afterthought)
@@ -8617,12 +8267,9 @@ async def handle_text_message(event):
             if send_followup:
                 await asyncio.sleep(random.uniform(2.0, 4.0))
                 followup = get_followup_message()
-                try:
-                    async with client.action(event.input_chat, 'typing'):
-                        await asyncio.sleep(random.uniform(0.5, 1.0))
-                except Exception:
-                    pass
-                await event.respond(followup)
+                await context.bot.send_chat_action(chat_id, 'typing')
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await context.bot.send_message(chat_id, followup)
                 store_message(chat_id, "Heather", followup)
 
         # Record response for duplicate detection (use full original response)
@@ -8650,8 +8297,8 @@ async def handle_text_message(event):
 
         # --- TIP HOOK (DIRECT SEND) — highest priority ---
         # Sends Emma photo + tip mention, bypasses LLM entirely
-        if not post_addon_sent and not is_group_chat_event(event):
-            tip_sent = await maybe_send_tip_hook(event, chat_id)
+        if not post_addon_sent and not is_group_chat_event(update):
+            tip_sent = await maybe_send_tip_hook(context.bot, chat_id)
             if tip_sent:
                 post_addon_sent = True
                 main_logger.info(f"[{request_id}] Tip hook (direct) sent to {chat_id}")
@@ -8660,7 +8307,7 @@ async def handle_text_message(event):
         # Check if Heather's response mentions sending a photo AND we can deliver one
         if not post_addon_sent:
             has_photo_source = image_library or can_generate_photos()
-            if has_photo_source and not is_group_chat_event(event) and can_send_photo_in_session(chat_id):
+            if has_photo_source and not is_group_chat_event(update) and can_send_photo_in_session(chat_id):
                 send_photo = False
                 photo_desc = None
 
@@ -8682,7 +8329,7 @@ async def handle_text_message(event):
                     if image_library:
                         proactive_cat = "sfw_casual" if not _is_sexual_conversation(chat_id) else "nsfw_topless"
                         proactive_cat = gate_image_category(chat_id, proactive_cat)
-                        lib_sent = await send_library_image(event, chat_id, proactive_cat)
+                        lib_sent = await send_library_image(context.bot, chat_id, proactive_cat)
                         if lib_sent:
                             last_photo_request[chat_id] = time.time()
                             main_logger.info(f"[{request_id}] Proactive library photo sent to {chat_id}")
@@ -8695,24 +8342,17 @@ async def handle_text_message(event):
                             # Natural delay before "taking" the selfie
                             await asyncio.sleep(random.uniform(3.0, 6.0))
                             # Generate image (show typing while generating)
-                            try:
-                                async with client.action(event.input_chat, 'photo'):
-                                    loop = asyncio.get_running_loop()
-                                    image_data = await loop.run_in_executor(
-                                        None, lambda: generate_heather_image(photo_desc)
-                                    )
-                            except Exception:
-                                loop = asyncio.get_running_loop()
-                                image_data = await loop.run_in_executor(
-                                    None, lambda: generate_heather_image(photo_desc)
-                                )
+                            await context.bot.send_chat_action(chat_id, 'typing')
+                            loop = asyncio.get_running_loop()
+                            image_data = await loop.run_in_executor(
+                                None, lambda: generate_heather_image(photo_desc)
+                            )
                             if image_data:
                                 caption = random.choice(PROACTIVE_SELFIE_CAPTIONS)
                                 image_file = io.BytesIO(image_data)
                                 image_file.name = "heather_selfie.png"
-                                await client.send_file(
-                                    chat_id, image_file,
-                                    caption=caption, force_document=False
+                                await context.bot.send_photo(
+                                    chat_id, image_file, caption=caption
                                 )
                                 store_message(chat_id, "Heather", f"[Sent selfie: {photo_desc[:50]}] {caption}")
                                 main_logger.info(f"[{request_id}] Sent proactive photo to {chat_id}")
@@ -8721,19 +8361,19 @@ async def handle_text_message(event):
 
         # --- UNSOLICITED NSFW PHOTO LOGIC ---
         # During sexual conversations, occasionally send a topless/nude unprompted (WARM only)
-        if not post_addon_sent and not is_group_chat_event(event) and get_warmth_tier(chat_id) == "WARM" and should_send_unsolicited_nsfw(chat_id):
+        if not post_addon_sent and not is_group_chat_event(update) and get_warmth_tier(chat_id) == "WARM" and should_send_unsolicited_nsfw(chat_id):
             await asyncio.sleep(random.uniform(3.0, 8.0))
-            sent = await send_unsolicited_nsfw(event, chat_id)
+            sent = await send_unsolicited_nsfw(context.bot, chat_id)
             if sent:
                 post_addon_sent = True
                 main_logger.info(f"[{request_id}] Unsolicited NSFW photo sent to {chat_id}")
 
         # --- VIDEO TEASE LOGIC ---
         # During sexual conversations, occasionally mention having videos to prompt requests (skip COLD)
-        if not post_addon_sent and not is_group_chat_event(event) and get_warmth_tier(chat_id) != "COLD" and should_tease_video(chat_id):
+        if not post_addon_sent and not is_group_chat_event(update) and get_warmth_tier(chat_id) != "COLD" and should_tease_video(chat_id):
             tease = random.choice(VIDEO_TEASE_MESSAGES)
             await asyncio.sleep(random.uniform(4.0, 10.0))
-            await event.respond(tease)
+            await context.bot.send_message(chat_id,tease)
             store_message(chat_id, "Heather", tease)
             last_video_tease[chat_id] = time.time()
             _video_offer_pending[chat_id] = time.time()
@@ -8741,10 +8381,10 @@ async def handle_text_message(event):
 
         # --- VOICE NUDGE LOGIC ---
         # Lowest priority in the add-on chain — suggest /voice_on to engaged users
-        if not post_addon_sent and not is_group_chat_event(event) and should_nudge_voice(chat_id):
+        if not post_addon_sent and not is_group_chat_event(update) and should_nudge_voice(chat_id):
             nudge = random.choice(VOICE_NUDGE_MESSAGES)
             await asyncio.sleep(random.uniform(3.0, 8.0))
-            await event.respond(nudge)
+            await context.bot.send_message(chat_id,nudge)
             store_message(chat_id, "Heather", nudge)
             voice_nudge_sent_today[chat_id] = datetime.now().strftime('%Y-%m-%d')
             main_logger.info(f"[{request_id}] Voice nudge sent to {chat_id}: {nudge}")
@@ -8812,7 +8452,7 @@ if MONITORING_ENABLED:
 </head>
 <body>
     <div class="container">
-        <h1>🚗 Heather Userbot Monitor <span class="userbot-badge">TELETHON</span></h1>
+        <h1>🚗 Heather Bot Monitor <span class="userbot-badge">BOT API</span></h1>
         
         <div class="stats">
             <h2>📊 Statistics</h2>
@@ -9148,8 +8788,8 @@ MAX_RECONNECT_DELAY = 300  # 5 minutes max
 async def main():
     """Main async entry point with auto-reconnection"""
     main_logger.info("=" * 60)
-    main_logger.info("Starting Heather Userbot v3.6 - TELETHON Edition")
-    main_logger.info(f"Session: {SESSION_NAME}")
+    main_logger.info("Starting Heather Bot v4.0 - Bot API Edition")
+    main_logger.info(f"Bot token: ...{BOT_TOKEN[-6:]}")
     main_logger.info(f"Personality: {personality.name}")
     main_logger.info("=" * 60)
 
@@ -9173,10 +8813,6 @@ async def main():
     ai_disclosure_shown = load_ai_disclosure_shown()
     main_logger.info(f"Loaded AI disclosure set: {len(ai_disclosure_shown)} users already disclosed")
 
-    _bc('TELEGRAM_IN', request_id, chat_id, text=user_message[:100])
-    _bc('TELEGRAM_OUT', request_id, chat_id, phase='sending')
-    _bc('TELEGRAM_OUT', request_id, chat_id, phase='sent')
-    
     # Load tip history
     raw_tips = load_tip_history()
     started = raw_tips.pop('_started_users', [])
@@ -9232,11 +8868,11 @@ async def main():
                         if cid in conversation_activity:
                             conversation_activity[cid]['checked_in'] = False
                         main_logger.info(f"[TAKEOVER] Auto-released {cid} after 30min idle")
-                        try:
-                            me = await client.get_me()
-                            await client.send_message(me.id, f"⏰ Auto-released takeover for {cid} (30min idle). Bot resumed.")
-                        except Exception:
-                            pass
+                        if ADMIN_USER_ID > 0 and _app:
+                            try:
+                                await _app.bot.send_message(ADMIN_USER_ID, f"⏰ Auto-released takeover for {cid} (30min idle). Bot resumed.")
+                            except Exception:
+                                pass
 
                 for chat_id, activity in list(conversation_activity.items()):
                     # Skip dead (deleted/deactivated) users
@@ -9298,14 +8934,15 @@ async def main():
                             if not checkin_msg:
                                 checkin_msg = get_checkin_message(chat_id)
                             # Show typing briefly before check-in
-                            try:
-                                entity = await client.get_entity(chat_id)
-                                async with client.action(entity, 'typing'):
-                                    await asyncio.sleep(random.uniform(1.5, 3.5))
-                            except Exception:
-                                await asyncio.sleep(random.uniform(1.5, 3.5))
+                            if _app:
+                                try:
+                                    await _app.bot.send_chat_action(chat_id, 'typing')
+                                except Exception:
+                                    pass
+                            await asyncio.sleep(random.uniform(1.5, 3.5))
 
-                            await client.send_message(chat_id, checkin_msg)
+                            if _app:
+                                await _app.bot.send_message(chat_id, checkin_msg)
                             store_message(chat_id, "Heather", checkin_msg)
                             conversation_activity[chat_id]['checked_in'] = True
                             # Update tracker
@@ -9346,105 +8983,91 @@ async def main():
     # ====================================================================
 
     async def _find_reengagement_candidates(history: dict) -> list:
-        """Scan Telegram dialogs for dormant conversations worth re-engaging."""
+        """Find dormant conversations worth re-engaging using in-memory activity data."""
         candidates = []
         now = datetime.now()
-        me = await client.get_me()
-        my_id = me.id
+        now_ts = time.time()
 
-        try:
-            async for dialog in client.iter_dialogs():
-                try:
-                    # Only private chats (not groups/channels)
-                    if not dialog.is_user:
-                        continue
-
-                    entity = dialog.entity
-                    # Skip bots and self
-                    if getattr(entity, 'bot', False) or entity.id == my_id:
-                        continue
-
-                    # Skip blocked users
-                    if entity.id in blocked_users:
-                        continue
-
-                    # Check last message date
-                    if not dialog.message or not dialog.message.date:
-                        continue
-
-                    last_msg_date = dialog.message.date.replace(tzinfo=None)
-                    idle_delta = now - last_msg_date
-                    idle_days = idle_delta.total_seconds() / 86400
-
-                    # Must be within the idle window (2-14 days)
-                    if idle_days < REENGAGEMENT_MIN_IDLE_DAYS or idle_days > REENGAGEMENT_MAX_IDLE_DAYS:
-                        continue
-
-                    # Last message must be FROM the user (not from us)
-                    if dialog.message.out:
-                        continue
-
-                    chat_id_str = str(entity.id)
-
-                    # Check re-engagement history
-                    if chat_id_str in history:
-                        h = history[chat_id_str]
-                        # Skip dead (deleted/deactivated) users
-                        if h.get('dead', False):
-                            continue
-                        # Don't ping if they never responded to last ping
-                        if h.get('ping_count', 0) > 0 and not h.get('last_ping_responded', True):
-                            continue
-                        # Don't ping within cooldown period
-                        last_ping = h.get('last_ping_at', '')
-                        if last_ping:
-                            try:
-                                last_ping_dt = datetime.fromisoformat(last_ping)
-                                days_since_ping = (now - last_ping_dt).total_seconds() / 86400
-                                if days_since_ping < REENGAGEMENT_COOLDOWN_DAYS:
-                                    continue
-                            except (ValueError, TypeError):
-                                pass
-
-                    # Fetch recent messages to check conversation depth
-                    messages = await client.get_messages(entity.id, limit=20)
-                    if len(messages) < REENGAGEMENT_MIN_MESSAGES:
-                        continue
-
-                    # Build recent message context (last 10 with text)
-                    recent_msgs = []
-                    for msg in reversed(messages[:10]):
-                        if msg.text:
-                            sender = "Heather" if msg.out else (entity.first_name or "User")
-                            recent_msgs.append({'sender': sender, 'text': msg.text[:200]})
-
-                    if len(recent_msgs) < 3:
-                        continue
-
-                    # Build candidate
-                    display_name = entity.first_name or entity.username or str(entity.id)
-                    username = entity.username or ""
-
-                    candidates.append({
-                        'chat_id': entity.id,
-                        'username': username,
-                        'display_name': display_name,
-                        'last_message_date': last_msg_date,
-                        'idle_days': idle_days,
-                        'recent_messages': recent_msgs,
-                        'message_count': len(messages),
-                    })
-
-                except Exception as e:
-                    main_logger.debug(f"[REENGAGEMENT] Error checking dialog: {e}")
+        for chat_id, activity in list(conversation_activity.items()):
+            try:
+                # Skip dead users
+                if activity.get('dead', False):
                     continue
 
-        except Exception as e:
-            main_logger.error(f"[REENGAGEMENT] Error iterating dialogs: {e}")
+                # Skip blocked users and admin
+                if chat_id in blocked_users or is_admin(chat_id):
+                    continue
+
+                # Need meaningful conversation history
+                turns = conversation_turn_count.get(chat_id, 0)
+                if turns < REENGAGEMENT_MIN_MESSAGES:
+                    continue
+
+                last_user_ts = activity.get('last_user', 0)
+                last_heather_ts = activity.get('last_heather', 0)
+                if last_user_ts <= 0:
+                    continue
+
+                # Last interaction must have been from user (they went quiet on us)
+                last_activity_ts = max(last_user_ts, last_heather_ts)
+                idle_days = (now_ts - last_activity_ts) / 86400
+
+                # Must be within the idle window
+                if idle_days < REENGAGEMENT_MIN_IDLE_DAYS or idle_days > REENGAGEMENT_MAX_IDLE_DAYS:
+                    continue
+
+                chat_id_str = str(chat_id)
+
+                # Check re-engagement history
+                if chat_id_str in history:
+                    h = history[chat_id_str]
+                    if h.get('dead', False):
+                        continue
+                    if h.get('ping_count', 0) > 0 and not h.get('last_ping_responded', True):
+                        continue
+                    last_ping = h.get('last_ping_at', '')
+                    if last_ping:
+                        try:
+                            last_ping_dt = datetime.fromisoformat(last_ping)
+                            days_since_ping = (now - last_ping_dt).total_seconds() / 86400
+                            if days_since_ping < REENGAGEMENT_COOLDOWN_DAYS:
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+
+                # Build recent message context from in-memory deque
+                recent_msgs = []
+                convo = conversations.get(chat_id)
+                if convo:
+                    for msg in list(convo)[-10:]:
+                        role = msg.get('role', '')
+                        text = msg.get('content', '')[:200]
+                        if text:
+                            sender = "Heather" if role == "assistant" else "User"
+                            recent_msgs.append({'sender': sender, 'text': text})
+
+                if len(recent_msgs) < 3:
+                    continue
+
+                display_name = user_info.get(chat_id, {}).get('first_name') or str(chat_id)
+                username = user_info.get(chat_id, {}).get('username') or ""
+
+                candidates.append({
+                    'chat_id': chat_id,
+                    'username': username,
+                    'display_name': display_name,
+                    'last_message_date': datetime.fromtimestamp(last_activity_ts),
+                    'idle_days': idle_days,
+                    'recent_messages': recent_msgs,
+                    'message_count': turns,
+                })
+
+            except Exception as e:
+                main_logger.debug(f"[REENGAGEMENT] Error checking {chat_id}: {e}")
+                continue
 
         # Score candidates: prefer more recent idle + higher message count
         for c in candidates:
-            # Lower idle = higher score (fresher), more messages = higher score
             recency_score = 1.0 / (c['idle_days'] + 0.1)
             volume_score = min(c['message_count'] / 20.0, 1.0)
             c['score'] = recency_score * 0.6 + volume_score * 0.4
@@ -9610,14 +9233,15 @@ async def main():
 
                     try:
                         # Show typing briefly before sending
-                        try:
-                            entity = await client.get_entity(candidate['chat_id'])
-                            async with client.action(entity, 'typing'):
-                                await asyncio.sleep(random.uniform(2.0, 5.0))
-                        except Exception:
-                            await asyncio.sleep(random.uniform(2.0, 5.0))
+                        if _app:
+                            try:
+                                await _app.bot.send_chat_action(candidate['chat_id'], 'typing')
+                            except Exception:
+                                pass
+                        await asyncio.sleep(random.uniform(2.0, 5.0))
 
-                        await client.send_message(candidate['chat_id'], message)
+                        if _app:
+                            await _app.bot.send_message(candidate['chat_id'], message)
 
                         # Update history
                         chat_id_str = str(candidate['chat_id'])
@@ -9673,317 +9297,109 @@ async def main():
     # ====================================================================
 
     async def _startup_catchup():
-        """Scan for unread private messages that arrived during downtime and reply."""
-        if not CATCHUP_ENABLED:
-            main_logger.info("[CATCHUP] Disabled via CATCHUP_ENABLED=False")
-            return
+        """Startup hook — Bot API receives all queued updates automatically via polling."""
+        save_shutdown_timestamp()
+        main_logger.info("[CATCHUP] Bot API mode — missed messages delivered automatically by polling")
 
-        await asyncio.sleep(5)  # Let Telegram connection stabilize
+    # ====================================================================
+    # BUILD AND RUN APPLICATION
+    # ====================================================================
+    global _app
+    application = Application.builder().token(BOT_TOKEN).build()
+    _app = application
 
-        shutdown_ts = load_shutdown_timestamp()
-        now = time.time()
+    # Register command handlers
+    application.add_handler(CommandHandler("start", handle_start))
+    application.add_handler(CommandHandler("about", handle_about))
+    application.add_handler(CommandHandler("status", handle_status))
+    application.add_handler(CommandHandler("rate_mode", handle_rate_mode))
+    application.add_handler(CommandHandler("chat_mode", handle_chat_mode))
+    application.add_handler(CommandHandler("heather_mode", handle_heather_mode))
+    application.add_handler(CommandHandler("help", handle_help))
+    application.add_handler(CommandHandler("stories", handle_stories_command))
+    application.add_handler(CommandHandler("selfie", handle_selfie))
+    application.add_handler(CommandHandler("reset", handle_reset))
+    application.add_handler(CommandHandler("voice_on", handle_voice_on))
+    application.add_handler(CommandHandler("voice_off", handle_voice_off))
 
-        if shutdown_ts is None:
-            main_logger.info("[CATCHUP] No shutdown timestamp found (first run?), saving current and skipping")
-            save_shutdown_timestamp()
-            return
+    # Admin command handlers
+    application.add_handler(CommandHandler("manual_on", handle_manual_on))
+    application.add_handler(CommandHandler("manual_off", handle_manual_off))
+    application.add_handler(CommandHandler("takeover", handle_takeover))
+    application.add_handler(CommandHandler("botreturn", handle_botreturn))
+    application.add_handler(CommandHandler("takeover_list", handle_takeover_list))
+    application.add_handler(CommandHandler("say", handle_say))
+    application.add_handler(CommandHandler("redteam_on", handle_redteam_on))
+    application.add_handler(CommandHandler("redteam_off", handle_redteam_off))
+    application.add_handler(CommandHandler("admin_stats", handle_admin_stats))
+    application.add_handler(CommandHandler("refresh_videos", handle_refresh_videos))
+    application.add_handler(CommandHandler("admin_block", handle_admin_block))
+    application.add_handler(CommandHandler("admin_unblock", handle_admin_unblock))
+    application.add_handler(CommandHandler("admin_reset", handle_admin_reset))
+    application.add_handler(CommandHandler("admin_reload", handle_admin_reload))
+    application.add_handler(CommandHandler("admin_blocked", handle_admin_blocked))
+    application.add_handler(CommandHandler("admin_flags", handle_admin_flags))
+    application.add_handler(CommandHandler("admin_flag_block", handle_admin_flag_block))
+    application.add_handler(CommandHandler("admin_flag_dismiss", handle_admin_flag_dismiss))
+    application.add_handler(CommandHandler("admin_flag_clear", handle_admin_flag_clear))
+    application.add_handler(CommandHandler("admin_reengage_scan", handle_admin_reengage_scan))
+    application.add_handler(CommandHandler("admin_reengage_send", handle_admin_reengage_send))
+    application.add_handler(CommandHandler("admin_reengage_history", handle_admin_reengage_history))
+    application.add_handler(CommandHandler("testtip", handle_testtip))
+    application.add_handler(CommandHandler("admin_warmth", handle_admin_warmth))
+    application.add_handler(CommandHandler("admin_opportunities", handle_admin_opportunities))
+    application.add_handler(CommandHandler("admin_help", handle_admin_help))
+    application.add_handler(CommandHandler("library_status", handle_library_status))
 
-        downtime_seconds = now - shutdown_ts
-        downtime_str = f"{downtime_seconds / 3600:.1f}h" if downtime_seconds > 3600 else f"{downtime_seconds / 60:.0f}m"
+    # Message handlers
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-        if downtime_seconds < CATCHUP_MIN_DOWNTIME_SECONDS:
-            main_logger.info(f"[CATCHUP] Downtime {downtime_str} < {CATCHUP_MIN_DOWNTIME_SECONDS}s minimum, skipping")
-            save_shutdown_timestamp()
-            return
+    # Pre-cache videos (no-op in Bot API, file_ids cached on first send)
+    asyncio.get_running_loop().create_task(precache_videos())
+    asyncio.get_running_loop().create_task(video_refresh_loop())
+    asyncio.get_running_loop().create_task(_startup_catchup())
 
-        main_logger.info(f"[CATCHUP] Detected downtime of {downtime_str} (since {datetime.fromtimestamp(shutdown_ts).strftime('%H:%M:%S')})")
+    main_logger.info("Bot API is running! Press Ctrl+C to stop.")
 
-        max_age_ts = now - (CATCHUP_MAX_AGE_HOURS * 3600)
-        me = await client.get_me()
-        my_id = me.id
-        candidates = []
+    try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=False)
 
-        try:
-            async for dialog in client.iter_dialogs():
+        # Block until shutdown signal
+        stop_event = asyncio.Event()
+        import signal as _signal
+        loop = asyncio.get_running_loop()
+        for sig in (getattr(_signal, 'SIGINT', None), getattr(_signal, 'SIGTERM', None)):
+            if sig:
                 try:
-                    # Only private chats with unread messages
-                    if not dialog.is_user or dialog.unread_count == 0:
-                        continue
-
-                    entity = dialog.entity
-                    chat_id = entity.id
-
-                    # Skip bots, self, blocked, admin, ignored
-                    if getattr(entity, 'bot', False) or chat_id == my_id:
-                        continue
-                    if chat_id in blocked_users or chat_id in IGNORED_CHATS:
-                        continue
-                    if is_admin(chat_id):
-                        continue
-
-                    # Must have a recent text message
-                    if not dialog.message or not dialog.message.text:
-                        continue
-
-                    msg_date = dialog.message.date
-                    if msg_date is None:
-                        continue
-                    msg_ts = msg_date.timestamp()
-
-                    # Skip messages older than max age or before shutdown
-                    if msg_ts < max_age_ts or msg_ts < shutdown_ts:
-                        continue
-
-                    # Must be from the user (not our outgoing message)
-                    if dialog.message.out:
-                        continue
-
-                    display_name = getattr(entity, 'first_name', None) or str(chat_id)
-                    candidates.append({
-                        'chat_id': chat_id,
-                        'entity': entity,
-                        'message': dialog.message,
-                        'msg_ts': msg_ts,
-                        'display_name': display_name,
-                        'unread_count': dialog.unread_count,
-                    })
-                except Exception as e:
-                    main_logger.debug(f"[CATCHUP] Error processing dialog: {e}")
-                    continue
-        except Exception as e:
-            main_logger.error(f"[CATCHUP] Failed to iterate dialogs: {e}")
-            save_shutdown_timestamp()
-            return
-
-        if not candidates:
-            main_logger.info("[CATCHUP] No unread messages found from downtime period")
-            save_shutdown_timestamp()
-            return
-
-        # Sort by most recent first, cap at max replies
-        candidates.sort(key=lambda c: c['msg_ts'], reverse=True)
-        candidates = candidates[:CATCHUP_MAX_REPLIES]
-
-        main_logger.info(f"[CATCHUP] Found {len(candidates)} candidate(s) to reply to")
-        replied_count = 0
-        failed_count = 0
-
-        for candidate in candidates:
-            chat_id = candidate['chat_id']
-            display_name = candidate['display_name']
-            latest_msg = candidate['message']
-
-            # Skip if live handler already processing this user
-            if chat_id in reply_in_progress:
-                main_logger.debug(f"[CATCHUP] Skipping {display_name} ({chat_id}) — reply already in progress")
-                continue
-
-            reply_in_progress.add(chat_id)
-            try:
-                # Seed conversation context from Telegram history (post-restart, deque is empty)
-                if chat_id not in conversations or len(conversations[chat_id]) == 0:
-                    conversations[chat_id] = deque()
-                    try:
-                        history_msgs = await client.get_messages(chat_id, limit=10)
-                        for msg in reversed(history_msgs):
-                            if msg.text:
-                                role = "assistant" if msg.out else "user"
-                                conversations[chat_id].append({"role": role, "content": msg.text})
-                        # Trim to match normal context window
-                        while len(conversations[chat_id]) > MAX_CONVERSATION_LENGTH:
-                            conversations[chat_id].popleft()
-                        main_logger.debug(f"[CATCHUP] Seeded {len(conversations[chat_id])} context messages for {chat_id}")
-                    except Exception as e:
-                        main_logger.warning(f"[CATCHUP] Failed to seed context for {chat_id}: {e}")
-
-                user_message = latest_msg.text
-
-                # Check if the missed message is a video/image request — handle directly
-                if is_video_request(user_message):
-                    sent = await send_video_to_chat(chat_id, client)
-                    if sent:
-                        main_logger.info(f"[CATCHUP] Sent video to {display_name} ({chat_id}) (video request)")
-                        replied_count += 1
-                        continue
-                if is_image_request(user_message) and image_library:
-                    category = gate_image_category(chat_id, get_image_category(user_message))
-                    event_proxy = type('obj', (object,), {'chat_id': chat_id, 'respond': lambda self, msg, **kw: client.send_message(chat_id, msg, **kw)})()
-                    sent = await send_library_image(event_proxy, chat_id, category)
-                    if sent:
-                        main_logger.info(f"[CATCHUP] Sent library image to {display_name} ({chat_id}) (image request)")
-                        replied_count += 1
-                        continue
-
-                # Generate AI response through normal pipeline
-                loop = asyncio.get_running_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda uid=chat_id, msg=user_message: get_text_ai_response(uid, msg)
-                )
-                response = validate_and_fix_response(response, get_user_mode(chat_id))
-                if not response or not response.strip():
-                    response = get_fallback_response(chat_id)
-
-                # Send with typing indicator
-                try:
-                    async with client.action(chat_id, 'typing'):
-                        typing_delay = calculate_typing_delay(response)
-                        await asyncio.sleep(min(typing_delay, 3.0))  # Cap typing delay for catch-up
-                except Exception:
+                    loop.add_signal_handler(sig, stop_event.set)
+                except (NotImplementedError, RuntimeError):
                     pass
+        await stop_event.wait()
+    finally:
+        main_logger.info("Shutting down...")
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
-                await client.send_message(chat_id, response)
-                store_message(chat_id, "Heather", response)
-                replied_count += 1
-                main_logger.info(f"[CATCHUP] Replied to {display_name} ({chat_id}): {response[:80]}")
+        if _ai_disclosure_unsaved_count > 0:
+            save_ai_disclosure_shown()
+            main_logger.info(f"Saved AI disclosure set on shutdown ({len(ai_disclosure_shown)} users)")
 
-                # Delay between replies to avoid Telegram flood
-                if candidate != candidates[-1]:
-                    delay = random.uniform(CATCHUP_DELAY_MIN, CATCHUP_DELAY_MAX)
-                    await asyncio.sleep(delay)
-
-            except Exception as e:
-                failed_count += 1
-                main_logger.error(f"[CATCHUP] Failed to reply to {display_name} ({chat_id}): {e}")
-            finally:
-                reply_in_progress.discard(chat_id)
-
-        # Summary
-        summary = f"[CATCHUP] Done — replied to {replied_count} user(s)"
-        if failed_count:
-            summary += f", {failed_count} failed"
-        main_logger.info(summary)
-
-        # Notify admin
-        if replied_count > 0 and ADMIN_USER_ID > 0:
-            try:
-                admin_msg = f"[CATCHUP] Replied to {replied_count} user(s) after {downtime_str} downtime"
-                if failed_count:
-                    admin_msg += f" ({failed_count} failed)"
-                await client.send_message(ADMIN_USER_ID, admin_msg)
-            except Exception as e:
-                main_logger.debug(f"[CATCHUP] Failed to notify admin: {e}")
-
-        # Update timestamp for next run
         save_shutdown_timestamp()
 
-    # Auto-reconnection loop
-    reconnect_delay = INITIAL_RECONNECT_DELAY
-
-    while True:
         try:
-            # Connect and run
-            if not client.is_connected():
-                main_logger.info("Connecting to Telegram...")
-                await client.start()
-                main_logger.info(
-                    f"[TELEGRAM] MTProto session established | "
-                    f"dc={client.session.dc_id} | "
-                    f"server={client.session.server_address}:{client.session.port}"
-                )
-                me = await client.get_me()
-                log_telegram_connection_ok(me)
-                main_logger.info("[TELEGRAM] Client is ready and listening")
-                # State updated before blocking call so it reflects actual connection
-                connection_state['connected'] = True
-                connection_state['reconnect_attempts'] = 0
-                reconnect_delay = INITIAL_RECONNECT_DELAY  # Reset delay on success
-                await client.run_until_disconnected()
-
-            me = await client.get_me()
-            main_logger.info(
-                f"[TELEGRAM] Already connected | "
-                f"user_id={me.id} | "
-                f"username={getattr(me, 'username', None)} | "
-                f"session={SESSION_NAME}"
-            )
-            main_logger.info(f"Logged in as: {me.first_name} (@{me.username})")
-
-            # Set Telegram bio to AI disclosure
-            try:
-                from telethon.tl.functions.account import UpdateProfileRequest
-                bio_text = "Heather — AI companion (creator-built)"
-                await client(UpdateProfileRequest(about=bio_text))
-                main_logger.info(f"Updated Telegram bio: {bio_text}")
-            except Exception as e:
-                main_logger.warning(f"Could not update Telegram bio: {e}")
-
-            main_logger.info("Userbot is running! Press Ctrl+C to stop.")
-
-            # Pre-cache videos to Telegram for instant sends
-            asyncio.create_task(precache_videos())
-            asyncio.create_task(video_refresh_loop())
-            asyncio.create_task(_startup_catchup())
-
-            # Run until disconnected
-            await client.run_until_disconnected()
-
-            # If we get here, we disconnected
-            connection_state['connected'] = False
-            connection_state['last_disconnect'] = time.time()
-            connection_state['disconnect_count'] += 1
-            main_logger.warning(f"Disconnected from Telegram (disconnect #{connection_state['disconnect_count']})")
-
-        except asyncio.CancelledError:
-            main_logger.info("Main loop cancelled, shutting down...")
-            break
-
-        except ConnectionError as e:
-            connection_state['connected'] = False
-            connection_state['last_disconnect'] = time.time()
-            main_logger.error(f"Connection error: {e}")
-
-        except OperationalError as e:
-            if "database is locked" in str(e):
-                main_logger.warning("Database locked — deleting stale journal and retrying...")
-                journal = f"{SESSION_NAME}.session-journal"
-                if os.path.exists(journal):
-                    os.remove(journal)
-                await asyncio.sleep(5)
-                continue  # retry WITHOUT incrementing reconnect_attempts
-            else:
-                connection_state['connected'] = False
-                main_logger.error(f"SQLite error: {e}")
-
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
         except Exception as e:
-            connection_state['connected'] = False
-            main_logger.error(f"Unexpected error in main loop: {type(e).__name__}: {e}")
-            log_error('MAIN', f"Unexpected error: {type(e).__name__}: {e}")
+            main_logger.debug(f"Shutdown error: {e}")
 
-        # Attempt reconnection with exponential backoff
-        connection_state['reconnect_attempts'] += 1
-
-        if connection_state['reconnect_attempts'] > MAX_RECONNECT_ATTEMPTS:
-            main_logger.critical(f"Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) exceeded. Exiting.")
-            log_error('MAIN', f"Max reconnection attempts exceeded after {connection_state['disconnect_count']} disconnects")
-            break
-
-        main_logger.info(f"Attempting reconnection in {reconnect_delay}s (attempt {connection_state['reconnect_attempts']}/{MAX_RECONNECT_ATTEMPTS})...")
-        await asyncio.sleep(reconnect_delay)
-
-        # Exponential backoff with cap
-        reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY)
-
-    # Cleanup
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-
-    # Persist AI disclosure set on shutdown
-    if _ai_disclosure_unsaved_count > 0:
-        save_ai_disclosure_shown()
-        main_logger.info(f"Saved AI disclosure set on shutdown ({len(ai_disclosure_shown)} users)")
-
-    # Save shutdown timestamp for catch-up on next restart
-    save_shutdown_timestamp()
-    main_logger.info("[CATCHUP] Saved shutdown timestamp")
-
-    if client.is_connected():
-        await client.disconnect()
-
-    main_logger.info("Bot shutdown complete")
+        main_logger.info("Bot shutdown complete")
 
 if __name__ == "__main__":
     try:

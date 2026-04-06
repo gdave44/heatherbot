@@ -2,7 +2,7 @@
 
 **A fully local AI companion chatbot ecosystem for Telegram — with multi-platform funnel automation.**
 
-HeatherBot is a Telegram userbot (MTProto via Telethon) that runs entirely on your own hardware. No cloud APIs, no OpenAI, no subscriptions. Just a local LLM, a persona YAML file, and a stack of services that make the bot feel like a real person texting.
+HeatherBot is a Telegram bot (Bot API via python-telegram-bot) that runs entirely on your own hardware. No cloud APIs, no OpenAI, no subscriptions. Just a local LLM, a persona YAML file, and a stack of services that make the bot feel like a real person texting.
 
 The ecosystem includes the core Telegram companion bot, a multi-platform outreach dashboard (Reddit + FetLife), and an autonomous management agent — all running locally.
 
@@ -21,7 +21,7 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
                         |                         |
                +--------+----------+     +--------+----------+
                |  HeatherBot Core  |     |   Chatterbox TTS  |
-               |   (Telethon)      |     |    port 5001      |
+               |   (Bot API)       |     |    port 5001      |
                |  + Flask monitor  |     +-------------------+
                |    port 8888      |
                +--------+----------+
@@ -55,20 +55,20 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
 
 ### Core Bot (Telegram)
 - **Persona YAML system** — Define your character's identity, backstory, personality, communication style, and sexual boundaries in a single YAML file. Swap personas by pointing to a different file.
-- **MTProto userbot** — Appears as a real Telegram user, not a bot. No "bot" label, no command menus.
+- **Bot API** — Standard Telegram bot using a BotFather token. Receives messages via long-polling. Admin commands are sent directly to the bot.
 - **Adaptive kink personas** — 17 kink-specific personality variants (breeding, CNC, BBC, MILF, anal, domme, etc.) that auto-detect each user's primary kink and shift the character's emphasis to match.
 - **Per-user memory system** — 4-layer personalization: kink scoring (21 categories), memorable moments, LLM session summaries, and callback prompts. Each user gets a persistent profile that grows over time.
 - **Image generation** — FLUX.1 dev FP8 via ComfyUI with runtime LoRA injection, face-swap, and body-accurate NSFW prompts with negative prompt support.
 - **Image analysis** — Receives and analyzes user photos via Ollama vision models (LLaVA).
 - **Voice messages** — Chatterbox TTS voice cloning for sending voice notes that sound like the character.
 - **Story system** — Pre-written story bank (YAML) with 60/40 banked/LLM-generated split, per-user rotation.
-- **Video delivery** — Pre-cached video library with offer-and-deliver flow.
-- **Content tier system** — FREE (teased NSFW) → FAN (explicit, 50 stars) → VIP (unrestricted, 200 stars). Telegram Stars integration via companion BotFather bot with deep-linked tip prompts.
+- **Video delivery** — Pre-cached video library with offer-and-deliver flow. Bot API file_ids are permanent — no re-upload needed after the first send.
+- **Content tier system** — FREE (teased NSFW) → FAN (explicit, 50 stars) → VIP (unrestricted, 200 stars). Telegram Stars integration via companion payment bot with deep-linked tip prompts.
 - **Post-processing pipeline** — 7-stage filter: strips thinking tags, asterisk actions, bracketed metadata, GLM artifacts, AI denial claims, unprompted AI self-identification, and quote wrapping. Optional human imperfections (typos, abbreviations) at 12% chance for realism.
 - **Monitoring dashboard** — Real-time Flask dashboard with user analytics, conversation logs, and conversion funnels.
 - **Content safety** — CSAM flag-and-review system, blocked user management, admin alerts, gender violation detection.
 - **AI disclosure** — Automatic first-message disclosure, bio tag, reality-check responses that own the AI status without breaking character.
-- **Re-engagement** — Automatic outreach to inactive users with configurable timing and personalized callbacks based on conversation history.
+- **Re-engagement** — Automatic outreach to inactive users using in-memory conversation activity tracking. Configurable timing and personalized callbacks based on conversation history.
 - **Breeding/CNC injection** — Contextual breeding and CNC fantasy prompts that inject based on keyword detection or conversation energy level.
 - **Domme mode** — Detects humiliation/degradation requests and switches to dominant personality overlay.
 - **Arousal tracking** — Detects climax/heated/afterglow states and adjusts responses accordingly.
@@ -140,7 +140,7 @@ Install these before setting up the bot:
 4. **[Chatterbox TTS](https://github.com/resemble-ai/chatterbox)** — For voice messages (optional)
 5. **[Playwright](https://playwright.dev/)** — For Reddit/FetLife dashboard: `playwright install chromium`
 6. **Python 3.10+**
-7. **Telegram account** — Register API credentials at [my.telegram.org](https://my.telegram.org)
+7. **Telegram bot token** — Create a bot via [@BotFather](https://t.me/BotFather) and save the token
 
 ## Installation
 
@@ -159,7 +159,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your Telegram API credentials and admin user ID
+# Edit .env with your bot token and admin user ID
 ```
 
 ## Configuration
@@ -169,10 +169,11 @@ cp .env.example .env
 Edit `.env` with your credentials (see `.env.example` for all options):
 
 ```env
-TELEGRAM_API_ID=your_api_id
-TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_BOT_TOKEN=your_botfather_token
 ADMIN_USER_ID=your_telegram_user_id
 ```
+
+`TELEGRAM_BOT_TOKEN` is the token provided by [@BotFather](https://t.me/BotFather) when you create the bot. `ADMIN_USER_ID` is your personal Telegram numeric user ID — admin commands sent to the bot from this account are treated as privileged.
 
 ### 2. Persona YAML
 
@@ -247,7 +248,7 @@ python heather_telegram_bot.py --personality my_persona.yaml --monitoring
 python heather_telegram_bot.py --monitoring --small-model --personality heather_personality.yaml --log-dir /path/to/logs
 ```
 
-First run will prompt for your Telegram phone number and verification code. Subsequent runs use the saved session file.
+The bot connects immediately using the BotFather token. No phone number or verification code required.
 
 ### Running the Frank Dashboard (Optional)
 
@@ -271,21 +272,22 @@ Opens two browser windows (Reddit + FetLife) and starts autonomous conversation 
 | `--log-dir` | `logs/` | Log directory |
 | `--debug` | off | Verbose logging |
 | `--unfiltered` | off | Disable content filters |
-| `--session` | `heather_session` | Telethon session file name |
 
 ### Admin Commands (in Telegram)
 
-Send these in your Saved Messages or any chat while logged in as the admin:
+Send these commands directly to the bot from your admin account (`ADMIN_USER_ID`):
 
-- `/stats` — User statistics
+- `/admin_stats` — User statistics and engagement metrics
 - `/admin_flags` — Review CSAM flags
-- `/block <user_id>` — Block a user
-- `/unblock <user_id>` — Unblock a user
-- `/takeover <user_id>` — Pause bot for a user (you reply manually)
+- `/admin_block <user_id>` — Block a user
+- `/admin_unblock <user_id>` — Unblock a user
+- `/takeover <user_id>` — Pause bot for a user (you reply manually via `/say`)
 - `/botreturn <user_id>` — Resume bot for a user
-- `/stories` — List story bank
-- `/stories reload` — Hot-reload stories YAML
-- `/menu` — Display interactive menu
+- `/say <user_id> <message>` — Send a message as Heather during takeover
+- `/admin_reengage_scan` — Show re-engagement candidates from active conversations
+- `/admin_reengage_send <user_id>` — Manually send a re-engagement message
+- `/admin_warmth <user_id>` — Show warmth tier and scoring for a user
+- `/admin_help` — Full list of admin commands
 
 ## White-Labeling
 
@@ -297,6 +299,7 @@ HeatherBot is designed to be re-skinned. To create a completely different charac
 4. **Clone a voice** — Use Chatterbox TTS to clone your character's voice
 5. **Set up face-swap** — Place your character's face source image for ComfyUI
 6. **Update `.env`** — Set `PAYMENT_BOT_USERNAME` to your payment bot's username
+7. **Create a bot** — Register a new bot with [@BotFather](https://t.me/BotFather) and set `TELEGRAM_BOT_TOKEN`
 
 The bot code is character-agnostic. All personality comes from the YAML files and media assets.
 
@@ -319,7 +322,7 @@ On Windows, use the included PowerShell service manager:
 
 ```
 heather-bot/                    # Core Telegram bot
-  heather_telegram_bot.py       # Main bot (~10K lines)
+  heather_telegram_bot.py       # Main bot (~9K lines, Bot API v4.0)
   heather_personality.yaml      # Character persona definition
   heather_kink_personas.yaml    # 17 adaptive kink persona overlays
   user_memory.py                # Per-user memory + kink scoring
@@ -347,12 +350,28 @@ heather-reddit/                 # Multi-platform outreach dashboard
 
 ## Known Limitations
 
-- **Single-session**: Telethon userbot can only have one active session per account. Running the bot locks out other Telethon scripts using the same session.
+- **Bot API constraints**: Bots only receive messages sent directly to them — they cannot see messages in chats where they are not a member, and cannot intercept outgoing messages. The re-engagement system uses in-memory conversation tracking rather than scanning Telegram dialogs.
 - **LLM hallucinations**: Small models (7B-12B) occasionally invent backstory details not in the persona YAML. The post-processing pipeline catches some of these but not all.
 - **No conversation-end detection**: The bot doesn't detect when a user has ended the conversation (repeated goodbyes). It will keep replying.
 - **Image generation speed**: ComfyUI FLUX.1 takes 10-30 seconds per image depending on GPU.
 - **FLUX body accuracy ceiling**: ~70% match to reference photos via text prompts alone. Custom LoRA or img2img needed for better body accuracy.
 - **Voice quality**: TTS quality varies. Short utterances work best.
+
+## Migrating from v3.x (Telethon/MTProto)
+
+v4.0 replaces the Telethon MTProto userbot with the standard Telegram Bot API:
+
+| v3.x (Telethon) | v4.0 (Bot API) |
+|-----------------|----------------|
+| `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` | `TELEGRAM_BOT_TOKEN` (from BotFather) |
+| Appears as a real Telegram user | Appears as a bot account |
+| Session file (`heather_session.session`) | No session file — token-based auth |
+| Reads Saved Messages for admin commands | Admin sends commands directly to the bot |
+| `iter_dialogs` for re-engagement scanning | In-memory `conversation_activity` dict |
+| File references expire (needed refresh) | Bot API `file_id`s are permanent |
+| `python-telegram-bot` not required | `python-telegram-bot>=21.0` required |
+
+Update your `.env`: remove `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, add `TELEGRAM_BOT_TOKEN`.
 
 ## Disclaimer
 
