@@ -1,0 +1,23 @@
+services:
+  heatherbot:
+    build:
+      context: ./heatherbot
+      dockerfile: Dockerfile
+    container_name: heatherbot
+    restart: unless-stopped
+    networks:
+      - ollama-net
+    env_file:
+      - .env
+    ports:
+      - 8888:8888
+    volumes:
+      - ./heatherbot/data:/app/data
+      - ./heatherbot/config:/app/config
+    depends_on:
+      - ollama
+      - kokoro
+
+networks:
+  ollama-net:
+    external: true

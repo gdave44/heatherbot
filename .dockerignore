@@ -1,0 +1,37 @@
+# Environment and secrets
+.env
+*.env
+
+# Personal media — mount via /app/config volume instead
+*.png
+*.jpg
+*.jpeg
+
+# Telethon session files
+*.session
+*.session-journal
+
+# Runtime data and logs
+data/
+logs/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# Editor
+*.swp
+*.swo
+.vscode/
+.idea/

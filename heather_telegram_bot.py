@@ -9134,7 +9134,7 @@ if MONITORING_ENABLED:
 def run_monitoring():
     if MONITORING_ENABLED:
         main_logger.info(f"Starting monitoring on port {MONITORING_PORT}")
-        monitor_app.run(host='127.0.0.1', port=MONITORING_PORT, debug=False, use_reloader=False)
+        monitor_app.run(host='0.0.0.0', port=MONITORING_PORT, debug=False, use_reloader=False)
 
 # ============================================================================
 # MAIN ENTRY POINT
