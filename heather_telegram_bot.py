@@ -1139,7 +1139,7 @@ def detect_csam_content(message: str) -> tuple:
             return True, pattern
     return False, None
 
-async def csam_flag(event, chat_id: int, user_message: str, display_name: str) -> bool:
+async def csam_flag(chat_id: int, user_message: str, display_name: str) -> bool:
     """Check for CSAM content and flag for admin review. Returns False always
     so the message continues processing — user is NOT interrupted.
     This check is ABSOLUTE — never bypassed, not even in redteam mode."""
@@ -7614,7 +7614,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # CSAM flag-and-review — flags suspicious messages for admin review
     # User is NOT blocked or interrupted; admin decides via /admin_flags
-    await csam_flag(event, chat_id, user_message, display_name)
+    await csam_flag(chat_id, user_message, display_name)
 
     if chat_id in manual_mode_chats:
         # Forward user's message to admin so they can see it in real time
