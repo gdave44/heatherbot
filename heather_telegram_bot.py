@@ -5166,8 +5166,10 @@ def check_heather_face() -> bool:
 # AI RESPONSE FUNCTIONS
 # ============================================================================
 
-def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, redteam: bool = False) -> str:
+def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, redteam: bool = False, request_id: str = None) -> str:
     """Get text response from AI model"""
+    if request_id is None:
+        request_id = f"llm-{chat_id}-{int(time.time() * 1000)}"
     stats['text_ai_requests'] += 1
 
     # Check circuit breaker
@@ -5565,7 +5567,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 main_logger.info("Reasoning model detected — using extended token budget")
                 # First request likely had insufficient tokens, retry with full budget
                 if not ai_response:
-                    return get_text_ai_response(chat_id, user_message, retry_count, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count, redteam=redteam, request_id=request_id)
 
             ai_response = postprocess_response(ai_response)
 
@@ -5581,7 +5583,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             if finish_reason == 'length':
                 main_logger.warning(f"Truncated by token limit (max_tokens={max_tokens}, attempt {retry_count+1}/3)")
                 if retry_count < 2:
-                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
                 salvaged = salvage_truncated_response(ai_response)
                 if salvaged:
                     ai_response = salvaged
@@ -5595,7 +5597,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 main_logger.warning(f"Character violation (attempt {retry_count+1}/3) triggered by {violated}: {ai_response[:200]}")
                 if retry_count < 2:
                     # Retry with higher temperature for different output
-                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
                 if is_ai_safety_refusal(ai_response):
                     main_logger.warning(f"AI safety refusal persisted after {retry_count+1} attempts, using deflection")
                     return get_ai_deflection_response(chat_id)
@@ -5607,7 +5609,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             if not redteam and contains_gender_violation(ai_response):
                 main_logger.warning(f"Gender violation (attempt {retry_count+1}/3): {ai_response[:200]}")
                 if retry_count < 2:
-                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
                 main_logger.warning(f"Gender violation persisted after {retry_count+1} attempts, using fallback")
                 return random.choice(HEATHER_SEXUAL_FALLBACKS)
             elif redteam and contains_gender_violation(ai_response):
@@ -5617,7 +5619,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             if is_incomplete_sentence(ai_response):
                 main_logger.warning(f"Incomplete response detected (attempt {retry_count+1}/3): {ai_response[:100]}")
                 if retry_count < 2:
-                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
                 # If still incomplete after retries, try salvaging before fallback
                 salvaged = salvage_truncated_response(ai_response)
                 if salvaged:
@@ -5634,7 +5636,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 resp_lower = ai_response.lower()
                 if any(fp in resp_lower for fp in filler_phrases):
                     main_logger.info(f"Filler detected during sexual convo, retrying: {ai_response[:80]}")
-                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam)
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
 
             # Update session state based on what we said (for consistency tracking)
             update_session_state_from_response(chat_id, ai_response)
@@ -8157,7 +8159,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(
             None,
-            lambda: get_text_ai_response(chat_id, user_message, retry_count=retry_for_duplicate, redteam=_rt)
+            lambda: get_text_ai_response(chat_id, user_message, retry_count=retry_for_duplicate, redteam=_rt, request_id=request_id)
         )
         if _rt:
             main_logger.info(f"[REDTEAM][{request_id}] Bypassed: validate_and_fix_response | raw resp={resp[:120] if resp else '(empty)'}")
