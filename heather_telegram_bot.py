@@ -6515,36 +6515,22 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
         msg_lower = msg.lower()
         return any(k in msg_lower for k in ("out of memory", "outofmemoryerror", "cuda out of memory", "not enough memory"))
 
-    with PerformanceTimer('COMFYUI', 'generate', f"desc={user_description[:30]}"):
-        for _attempt in range(2):  # try once, retry once on OOM
-            prompt_id = queue_comfyui_prompt(workflow)
-
-            if progress_callback:
-                progress_callback("⏳ Generating...")
-
-            start_time = time.time()
-            _oom_retry = False
-            while time.time() - start_time < COMFYUI_TIMEOUT:
-                history = get_comfyui_history(prompt_id)
-                if prompt_id in history:
-                    # Check for errors
-                    status = history[prompt_id].get('status', {})
-                    if status.get('status_str') == 'error':
-                        msgs = status.get('messages', [])
-                        err_msg = "Unknown error"
-                        for msg in msgs:
-                            if isinstance(msg, list) and len(msg) > 1:
-                                err_msg = msg[1].get('exception_message', str(msg))
-                        if _is_oom(err_msg) and _attempt == 0:
-                            main_logger.warning(f"[COMFYUI] OOM on attempt 1 — waiting 10s then retrying")
-                            time.sleep(10)
-                            _oom_retry = True
-                            break
-                        stats['comfyui_failures'] += 1
-                        raise Exception(f"ComfyUI error: {err_msg}")
+    def _poll_for_result(prompt_id: str) -> bytes:
+        """Poll ComfyUI history until the job finishes. Raises on error or timeout."""
+        start_time = time.time()
+        while time.time() - start_time < COMFYUI_TIMEOUT:
+            history = get_comfyui_history(prompt_id)
+            if prompt_id in history:
+                status = history[prompt_id].get('status', {})
+                if status.get('status_str') == 'error':
+                    msgs = status.get('messages', [])
+                    err_msg = "Unknown error"
+                    for msg in msgs:
+                        if isinstance(msg, list) and len(msg) > 1:
+                            err_msg = msg[1].get('exception_message', str(msg))
+                    raise Exception(f"ComfyUI error: {err_msg}")
 
                 outputs = history[prompt_id].get('outputs', {})
-                # Prefer node 9 (face-swapped final), fall back to node 12 (preview)
                 for node_id in [FINAL_OUTPUT_NODE, "12"]:
                     node_output = outputs.get(node_id, {})
                     if 'images' in node_output:
@@ -6560,15 +6546,26 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
                                 return image_data
                             elif image_data:
                                 main_logger.warning(f"Invalid image from node {node_id}: {len(image_data)} bytes")
-                time.sleep(2)
+            time.sleep(2)
+        raise Exception("Generation timeout")
 
-            if _oom_retry:
-                main_logger.warning(f"[COMFYUI] Retrying after OOM (attempt {_attempt + 2})")
-                continue
-            break  # timed out without OOM — fall through to failure
-
-    stats['comfyui_failures'] += 1
-    raise Exception("Generation timeout")
+    with PerformanceTimer('COMFYUI', 'generate', f"desc={user_description[:30]}"):
+        prompt_id = queue_comfyui_prompt(workflow)
+        if progress_callback:
+            progress_callback("⏳ Generating...")
+        try:
+            return _poll_for_result(prompt_id)
+        except Exception as e:
+            if _is_oom(str(e)):
+                main_logger.warning(f"[COMFYUI] OOM on first attempt — waiting 5s then retrying")
+                time.sleep(5)
+                main_logger.warning(f"[COMFYUI] Retrying after OOM")
+                prompt_id = queue_comfyui_prompt(workflow)
+                if progress_callback:
+                    progress_callback("⏳ Retrying...")
+                return _poll_for_result(prompt_id)
+            stats['comfyui_failures'] += 1
+            raise
 
 # ============================================================================
 # TTS VOICE MESSAGES
