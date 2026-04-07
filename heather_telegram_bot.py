@@ -6286,6 +6286,8 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
     workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
     full_prompt = build_heather_prompt(user_description)
     is_nsfw = _is_nsfw_context(user_description)
+    if BREADCRUMB_LOGGING:
+        main_logger.info(f"[COMFYUI] prompt → {full_prompt}")
 
     # Randomize seeds (FLUX workflow: node 7 = main KSampler, node 14 = face blend KSampler)
     for node_id in ["7", "14"]:
