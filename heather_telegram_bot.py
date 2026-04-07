@@ -6068,6 +6068,37 @@ if os.path.exists(HEATHER_FACE_IMAGE):
 else:
     main_logger.warning(f"[COMFYUI] Face image NOT found: {HEATHER_FACE_IMAGE}")
 
+def get_comfyui_loras() -> set:
+    """Fetch the list of LoRA filenames available in ComfyUI."""
+    try:
+        req = urllib.request.Request(f"{COMFYUI_ENDPOINT}/object_info/LoraLoader")
+        with urllib.request.urlopen(req, timeout=10) as response:
+            info = json.loads(response.read().decode('utf-8'))
+            lora_list = (
+                info.get("LoraLoader", {})
+                    .get("input", {})
+                    .get("required", {})
+                    .get("lora_name", [None])[0]
+            )
+            if isinstance(lora_list, list):
+                return set(lora_list)
+    except Exception as e:
+        main_logger.warning(f"[COMFYUI] Could not fetch LoRA list: {e}")
+    return set()
+
+_comfyui_available_loras: Optional[set] = None  # None = not yet fetched
+
+def _lora_available(lora_name: str) -> bool:
+    """Return True if the named LoRA exists in ComfyUI. Fetches list on first call."""
+    global _comfyui_available_loras
+    if _comfyui_available_loras is None:
+        _comfyui_available_loras = get_comfyui_loras()
+        if _comfyui_available_loras:
+            main_logger.info(f"[COMFYUI] {len(_comfyui_available_loras)} LoRA(s) available")
+        else:
+            main_logger.warning("[COMFYUI] No LoRAs found or list unavailable")
+    return lora_name in _comfyui_available_loras
+
 def upload_image_to_comfyui(filepath: str) -> Optional[str]:
     """Upload an image file to ComfyUI's input directory. Returns the filename ComfyUI assigned."""
     try:
@@ -6225,45 +6256,57 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
     if "5" in workflow:
         workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
 
-    # NSFW: inject NSFW Master LoRA (always) + anatomy LoRA (only when vulva visible)
+    # NSFW: inject LoRAs only if they are installed in ComfyUI
     if is_nsfw:
-        workflow["20"] = {
-            "inputs": {
-                "lora_name": "NSFW_master.safetensors",
-                "strength_model": 0.8,
-                "strength_clip": 0.8,
-                "model": ["1", 0],
-                "clip": ["1", 1],
-            },
-            "class_type": "LoraLoader",
-            "_meta": {"title": "NSFW Master"}
-        }
-        # Only add anatomy LoRA when the description specifically shows vulva
-        vulva_keywords = ["pussy", "vulva", "labia", "spread", "laying", "laying_down",
-                          "legs apart", "legs spread", "exposed", "closeup", "close up"]
-        desc_lower = user_description.lower()
-        needs_anatomy_lora = any(kw in desc_lower for kw in vulva_keywords)
-        if needs_anatomy_lora:
-            workflow["21"] = {
+        nsfw_lora = "NSFW_master.safetensors"
+        anatomy_lora = "flux-female-anatomy.safetensors"
+        has_nsfw_lora = _lora_available(nsfw_lora)
+        last_model_node = "1"  # checkpoint model output
+        last_clip_node = "1"   # checkpoint clip output
+
+        if has_nsfw_lora:
+            workflow["20"] = {
                 "inputs": {
-                    "lora_name": "flux-female-anatomy.safetensors",
-                    "strength_model": 0.5,
-                    "strength_clip": 0.5,
-                    "model": ["20", 0],
-                    "clip": ["20", 1],
+                    "lora_name": nsfw_lora,
+                    "strength_model": 0.8,
+                    "strength_clip": 0.8,
+                    "model": [last_model_node, 0],
+                    "clip": [last_clip_node, 1],
                 },
                 "class_type": "LoraLoader",
-                "_meta": {"title": "Anatomy Detail"}
+                "_meta": {"title": "NSFW Master"}
             }
-            workflow["7"]["inputs"]["model"] = ["21", 0]
-            workflow["3"]["inputs"]["clip"] = ["21", 1]
-            workflow["4"]["inputs"]["clip"] = ["21", 1]
-            main_logger.info("NSFW image — NSFW Master + anatomy LoRAs injected")
+            last_model_node = "20"
+            last_clip_node = "20"
+
+            vulva_keywords = ["pussy", "vulva", "labia", "spread", "laying", "laying_down",
+                              "legs apart", "legs spread", "exposed", "closeup", "close up"]
+            needs_anatomy_lora = any(kw in user_description.lower() for kw in vulva_keywords)
+            if needs_anatomy_lora and _lora_available(anatomy_lora):
+                workflow["21"] = {
+                    "inputs": {
+                        "lora_name": anatomy_lora,
+                        "strength_model": 0.5,
+                        "strength_clip": 0.5,
+                        "model": [last_model_node, 0],
+                        "clip": [last_clip_node, 1],
+                    },
+                    "class_type": "LoraLoader",
+                    "_meta": {"title": "Anatomy Detail"}
+                }
+                last_model_node = "21"
+                last_clip_node = "21"
+                main_logger.info("NSFW image — NSFW Master + anatomy LoRAs injected")
+            else:
+                if needs_anatomy_lora:
+                    main_logger.warning(f"[COMFYUI] {anatomy_lora} not in ComfyUI, skipping anatomy LoRA")
+                main_logger.info("NSFW image — NSFW Master LoRA only")
+
+            workflow["7"]["inputs"]["model"] = [last_model_node, 0]
+            workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
+            workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
         else:
-            workflow["7"]["inputs"]["model"] = ["20", 0]
-            workflow["3"]["inputs"]["clip"] = ["20", 1]
-            workflow["4"]["inputs"]["clip"] = ["20", 1]
-            main_logger.info("NSFW image — NSFW Master LoRA only")
+            main_logger.warning(f"[COMFYUI] {nsfw_lora} not in ComfyUI — generating without NSFW LoRA")
     # SFW: no LoRAs, use checkpoint directly (already wired in base workflow)
 
     # ControlNet pose injection — detect pose, inject nodes at runtime
