@@ -6259,13 +6259,33 @@ def _get_pose_nsfw_description(pose_id: str) -> str:
     return random.choice(NSFW_SELFIE_DESCRIPTIONS)
 
 
+def _clean_photo_request(request: str) -> str:
+    """Strip conversational framing from a photo request, leaving the scene description."""
+    import re
+    text = request.strip()
+    # Remove leading request verbs / address patterns
+    patterns = [
+        r"^(?:can you |could you |please |will you )*(?:send|show|take|give|share|post|snap)\s+(?:me\s+)?(?:a\s+)?(?:picture|photo|pic|selfie|image|snap)\s+(?:of\s+)?(?:you(?:rself)?\s+)?",
+        r"^(?:i\s+)?(?:want|wanna|need|would like)\s+(?:to\s+see\s+)?(?:a\s+)?(?:picture|photo|pic|selfie|image)\s+(?:of\s+)?(?:you(?:rself)?\s+)?",
+        r"^(?:let me|lemme)\s+see\s+(?:you\s+)?",
+        r"^(?:show me|show us)\s+(?:you(?:rself)?\s+)?",
+    ]
+    for pat in patterns:
+        text = re.sub(pat, '', text, flags=re.IGNORECASE).strip()
+    # Strip leading filler words left behind
+    text = re.sub(r'^(?:you\s+)?(?:in\s+|wearing\s+)', lambda m: m.group(0), text, flags=re.IGNORECASE)
+    return text or request.strip()
+
 def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
-    """Use the LLM + recent chat history to expand a vague photo request into a
-    detailed scene/pose/outfit description for ComfyUI.  Returns the raw expanded
-    description string (no character prefix/suffix — those are added by
-    build_heather_prompt).  Falls back to user_request unchanged on any error."""
+    """Use the LLM + recent chat history to fill in scene/pose details that the
+    user's request left vague.  The cleaned request is always used as the anchor —
+    the LLM only adds setting and pose when they are absent.  Falls back to the
+    cleaned request unchanged on any LLM error."""
     try:
         persona_name = personality.name
+
+        # Strip conversational framing ("send me a picture of you wearing...")
+        anchor = _clean_photo_request(user_request)
 
         # Gather recent conversation turns for context (last 10 messages)
         if chat_id not in conversations:
@@ -6278,27 +6298,24 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
             history_text += f"{role}: {msg['content']}\n"
 
         system_prompt = (
-            "You are a prompt writer for a FLUX image generator. "
-            "You will receive a photo request and optional conversation history.\n\n"
-            "RULES — follow in strict priority order:\n"
-            "1. The photo request is AUTHORITATIVE. Every detail the user explicitly states "
-            "(outfit, location, pose, nudity level) MUST appear in your output exactly as stated. "
-            "NEVER replace or override anything the user specified.\n"
-            "2. Use conversation history ONLY to fill in details the request leaves vague "
-            "(e.g. if no location is mentioned, infer one from context; "
-            "if an outfit is already specified, ignore any clothing mentioned in history).\n"
-            "3. Output a SHORT comma-separated prompt fragment — 10-20 words max. "
-            "No prose, no sentences, no explanation. "
-            "Format: '<outfit/nudity>, <setting>, <pose/activity>, <expression>'\n"
-            "4. Do NOT include the character's name or physical appearance.\n\n"
-            "Good output example: 'wearing a white spa uniform, massage room, standing facing camera, warm smile'\n"
-            "Bad output example: 'The user is standing nude in a bedroom holding a phone.' (prose, overrides outfit)"
+            "You are a fill-in assistant for a FLUX image generator.\n"
+            "You will be given an ANCHOR (the user's exact photo request, already cleaned) "
+            "and optional conversation history.\n\n"
+            "YOUR ONLY JOB: add a short setting and pose if the anchor does not already include them.\n"
+            "- If the anchor already specifies a location, DO NOT add another one.\n"
+            "- If the anchor already specifies a pose or activity, DO NOT add another one.\n"
+            "- NEVER change, replace, or reword the anchor text.\n"
+            "- NEVER infer nudity or clothing from history — use only what the anchor says.\n\n"
+            "Output format: return the anchor text followed by any additions, all as a single "
+            "comma-separated fragment. 15-25 words max. No prose, no sentences.\n\n"
+            "Example — anchor: 'wearing a sexy massage uniform'\n"
+            "Good output: 'wearing a sexy massage uniform, spa treatment room, standing facing camera, warm smile'\n"
+            "Bad output: 'wearing nothing, bedroom' (ignored anchor, pulled from history)"
         )
 
-        user_content = ""
+        user_content = f"ANCHOR: {anchor}"
         if history_text.strip():
-            user_content += f"Conversation history (context only — do NOT override the request):\n{history_text.strip()}\n\n"
-        user_content += f"Photo request (authoritative): {user_request}"
+            user_content += f"\n\nConversation history (for setting/pose inference only):\n{history_text.strip()}"
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -6308,8 +6325,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                "temperature": 0.7,
-                "max_tokens": 120,
+                "temperature": 0.5,
+                "max_tokens": 80,
                 "stream": False,
             },
             timeout=20,
@@ -6318,13 +6335,17 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
         if response.status_code == 200:
             data = response.json()
             expanded = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            if expanded:
+            # Safety check: anchor must still be present (model didn't throw it away)
+            if expanded and anchor.split()[0].lower() in expanded.lower():
                 main_logger.info(f"[COMFYUI] Context-expanded description: {expanded}")
                 return expanded
+            elif expanded:
+                main_logger.warning(f"[COMFYUI] LLM dropped anchor, using anchor+expansion fallback")
+                return f"{anchor}, {expanded}"
     except Exception as e:
         main_logger.warning(f"[COMFYUI] Context expansion failed, using raw request: {e}")
 
-    return user_request
+    return _clean_photo_request(user_request)
 
 def build_heather_prompt(user_description: str) -> str:
     user_description = user_description.strip().lower()
