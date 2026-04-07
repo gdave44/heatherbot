@@ -3049,8 +3049,8 @@ PROACTIVE_PHOTO_CHANCE = 0.05       # 5% chance per message after min turns (was
 PROACTIVE_PHOTO_COOLDOWN = 1800     # 30 min cooldown between proactive photos per user (was 10 min)
 
 # Context-triggered photo settings — fires when user mentions persona's life topics
-CONTEXT_PHOTO_MIN_MSGS = 25         # Earliest a context photo can fire
-CONTEXT_PHOTO_MAX_MSGS = 50         # Latest threshold (randomised per chat)
+CONTEXT_PHOTO_MIN_MSGS = int(os.getenv("CONTEXT_PHOTO_MIN_MSGS", "25"))
+CONTEXT_PHOTO_MAX_MSGS = int(os.getenv("CONTEXT_PHOTO_MAX_MSGS", "50"))
 CONTEXT_PHOTO_COOLDOWN = 1800       # 30 min cooldown between context photos
 _context_photo_next_trigger: Dict[int, int] = {}   # chat_id → turn count threshold
 _context_photo_last_sent: Dict[int, float] = {}    # chat_id → timestamp
