@@ -943,10 +943,11 @@ WARMTH_TIP_BOOST = 0.3         # Warmth bump per tip (capped at 1.0)
 # Implicit decline detection
 WARMTH_DECLINE_MSG_WINDOW = 10  # Messages after tip mention with no tip = implicit decline
 
-# Photo caps — same for all users (warmth is analytics only, not a behavioral modifier)
-PHOTO_CAP_WARM = 5
-PHOTO_CAP_NEW = 5
-PHOTO_CAP_COLD = 5
+# Photo caps — configurable via PHOTO_CAP env var (single value applies to all tiers)
+_photo_cap = int(os.getenv("PHOTO_CAP", "5"))
+PHOTO_CAP_WARM = _photo_cap
+PHOTO_CAP_NEW  = _photo_cap
+PHOTO_CAP_COLD = _photo_cap
 
 # Takeover opportunity tracking
 _takeover_opportunities: Dict[int, dict] = {}  # chat_id -> {signal, detected_at, session_msgs, warmth, display_name}
@@ -3048,8 +3049,7 @@ PROACTIVE_PHOTO_CHANCE = 0.05       # 5% chance per message after min turns (was
 PROACTIVE_PHOTO_COOLDOWN = 1800     # 30 min cooldown between proactive photos per user (was 10 min)
 
 # Photo cap — rolling window (not session-based)
-PHOTO_CAP_LIMIT = 5                 # Max photos per rolling window
-PHOTO_CAP_WINDOW_HOURS = 2          # Rolling window size in hours
+PHOTO_CAP_WINDOW_HOURS = int(os.getenv("PHOTO_CAP_WINDOW_HOURS", "2"))  # Rolling window size
 photo_send_times: Dict[int, list] = {}  # chat_id -> [timestamp, timestamp, ...]
 received_photo_count: Dict[int, int] = {}  # chat_id -> count of photos received from user this session
 
