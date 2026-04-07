@@ -3846,29 +3846,42 @@ NSFW_SELFIE_DESCRIPTIONS = [
 def _is_nsfw_context(text: str) -> bool:
     """Check if text contains explicit NSFW/intimate context.
 
-    Words must be unambiguously sexual/nude — avoid broad terms like 'bare',
-    'breasts', 'chest', or 'full body' that appear in clothed photo descriptions.
+    Uses two passes:
+    1. Unambiguous single terms (nude, naked, pussy, etc.)
+    2. Anatomy word within 4 words of an exposure qualifier
+       (e.g. "breasts exposed", "nipples showing", "ass out")
     """
+    import re as _re
+
+    text_lower = text.lower()
+
+    # Pass 1 — unambiguous terms that are always NSFW regardless of context
     nsfw_words = [
-        # Unambiguous nudity
         "nude", "naked", "topless", "nudity", "nudes",
-        # Explicit anatomy
-        "tits", "titties", "boobs", "nipple", "nipples", "pussy", "cock", "dick",
-        # Undressing intent
+        "tits", "titties", "boobs", "pussy", "cock", "dick", "penis", "vagina",
         "strip", "undress", "take it off", "take off your", "take them off",
         "nothing on", "wearing nothing", "no clothes", "without clothes",
-        "everything off", "clothes off",
-        # Explicit requests
+        "everything off", "clothes off", "no top", "no shirt", "no bra",
+        "shirt off", "top off", "bra off",
         "show me everything", "show it all", "show your body", "show me your body",
         "flash me", "flash your",
-        # Labels
-        "nsfw", "explicit", "x rated", "x-rated",
-        # Contextual (only as phrases, not standalone words)
-        "bare breasts", "bare chest", "bare body", "bare ass", "bare skin",
+        "nsfw", "x rated", "x-rated",
         "sexy pic", "dirty pic", "naughty pic", "spicy pic",
     ]
-    text_lower = text.lower()
-    return any(w in text_lower for w in nsfw_words)
+    if any(w in text_lower for w in nsfw_words):
+        return True
+
+    # Pass 2 — anatomy word near an exposure qualifier (handles "breasts exposed",
+    # "nipple visible", "ass out", "chest uncovered", etc.)
+    _anatomy = r'(breast|nipple|pussy|ass|butt|chest|cock|dick|penis|vagina)'
+    _qualifier = r'(exposed|bare|naked|nude|showing|visible|out|uncovered|open|reveal)'
+    # Match anatomy+qualifier or qualifier+anatomy within a short span
+    if _re.search(rf'{_anatomy}\w*\s+\w*\s*{_qualifier}', text_lower):
+        return True
+    if _re.search(rf'{_qualifier}\w*\s+\w*\s*{_anatomy}', text_lower):
+        return True
+
+    return False
 
 def extract_photo_context_from_response(response: str) -> str:
     """Try to extract what kind of photo from the AI response context.
