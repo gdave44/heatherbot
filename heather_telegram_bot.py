@@ -6490,26 +6490,37 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
                     del workflow[nid]
             main_logger.info(f"Face swap skipped for {pose_id}")
 
+    def _is_oom(msg: str) -> bool:
+        msg_lower = msg.lower()
+        return any(k in msg_lower for k in ("out of memory", "outofmemoryerror", "cuda out of memory", "not enough memory"))
+
     with PerformanceTimer('COMFYUI', 'generate', f"desc={user_description[:30]}"):
-        prompt_id = queue_comfyui_prompt(workflow)
+        for _attempt in range(2):  # try once, retry once on OOM
+            prompt_id = queue_comfyui_prompt(workflow)
 
-        if progress_callback:
-            progress_callback("⏳ Generating...")
+            if progress_callback:
+                progress_callback("⏳ Generating...")
 
-        start_time = time.time()
-        while time.time() - start_time < COMFYUI_TIMEOUT:
-            history = get_comfyui_history(prompt_id)
-            if prompt_id in history:
-                # Check for errors
-                status = history[prompt_id].get('status', {})
-                if status.get('status_str') == 'error':
-                    msgs = status.get('messages', [])
-                    err_msg = "Unknown error"
-                    for msg in msgs:
-                        if isinstance(msg, list) and len(msg) > 1:
-                            err_msg = msg[1].get('exception_message', str(msg))
-                    stats['comfyui_failures'] += 1
-                    raise Exception(f"ComfyUI error: {err_msg}")
+            start_time = time.time()
+            _oom_retry = False
+            while time.time() - start_time < COMFYUI_TIMEOUT:
+                history = get_comfyui_history(prompt_id)
+                if prompt_id in history:
+                    # Check for errors
+                    status = history[prompt_id].get('status', {})
+                    if status.get('status_str') == 'error':
+                        msgs = status.get('messages', [])
+                        err_msg = "Unknown error"
+                        for msg in msgs:
+                            if isinstance(msg, list) and len(msg) > 1:
+                                err_msg = msg[1].get('exception_message', str(msg))
+                        if _is_oom(err_msg) and _attempt == 0:
+                            main_logger.warning(f"[COMFYUI] OOM on attempt 1 — waiting 10s then retrying")
+                            time.sleep(10)
+                            _oom_retry = True
+                            break
+                        stats['comfyui_failures'] += 1
+                        raise Exception(f"ComfyUI error: {err_msg}")
 
                 outputs = history[prompt_id].get('outputs', {})
                 # Prefer node 9 (face-swapped final), fall back to node 12 (preview)
@@ -6528,7 +6539,12 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
                                 return image_data
                             elif image_data:
                                 main_logger.warning(f"Invalid image from node {node_id}: {len(image_data)} bytes")
-            time.sleep(2)
+                time.sleep(2)
+
+            if _oom_retry:
+                main_logger.warning(f"[COMFYUI] Retrying after OOM (attempt {_attempt + 2})")
+                continue
+            break  # timed out without OOM — fall through to failure
 
     stats['comfyui_failures'] += 1
     raise Exception("Generation timeout")
