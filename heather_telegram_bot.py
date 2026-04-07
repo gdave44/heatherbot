@@ -6068,6 +6068,45 @@ if os.path.exists(HEATHER_FACE_IMAGE):
 else:
     main_logger.warning(f"[COMFYUI] Face image NOT found: {HEATHER_FACE_IMAGE}")
 
+def upload_image_to_comfyui(filepath: str) -> Optional[str]:
+    """Upload an image file to ComfyUI's input directory. Returns the filename ComfyUI assigned."""
+    try:
+        with open(filepath, 'rb') as f:
+            image_data = f.read()
+        filename = os.path.basename(filepath)
+        boundary = "----FormBoundary" + str(random.randint(10000, 99999))
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode('utf-8') + image_data + f"\r\n--{boundary}--\r\n".encode('utf-8')
+        req = urllib.request.Request(
+            f"{COMFYUI_ENDPOINT}/upload/image",
+            data=body,
+            headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            uploaded_name = result.get('name', filename)
+            main_logger.info(f"[COMFYUI] Face image uploaded to ComfyUI input: {uploaded_name}")
+            return uploaded_name
+    except Exception as e:
+        main_logger.error(f"[COMFYUI] Failed to upload face image to ComfyUI: {e}")
+        return None
+
+_comfyui_face_image_name: Optional[str] = None  # cached name after upload
+
+def ensure_face_image_uploaded() -> Optional[str]:
+    """Upload face image to ComfyUI input dir if not done yet. Returns ComfyUI filename."""
+    global _comfyui_face_image_name
+    if _comfyui_face_image_name:
+        return _comfyui_face_image_name
+    if not os.path.exists(HEATHER_FACE_IMAGE):
+        main_logger.warning("[COMFYUI] Face image file not found, skipping upload")
+        return None
+    _comfyui_face_image_name = upload_image_to_comfyui(HEATHER_FACE_IMAGE)
+    return _comfyui_face_image_name
+
 def queue_comfyui_prompt(workflow: dict) -> str:
     data = json.dumps({"prompt": workflow}).encode('utf-8')
     req = urllib.request.Request(
@@ -6075,9 +6114,14 @@ def queue_comfyui_prompt(workflow: dict) -> str:
         data=data,
         headers={'Content-Type': 'application/json'}
     )
-    with urllib.request.urlopen(req, timeout=30) as response:
-        result = json.loads(response.read().decode('utf-8'))
-        return result.get('prompt_id')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('prompt_id')
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        main_logger.error(f"[COMFYUI] /prompt returned {e.code}: {body[:1000]}")
+        raise Exception(f"HTTP Error {e.code}: {e.reason}")
 
 def get_comfyui_history(prompt_id: str) -> dict:
     try:
@@ -6172,9 +6216,10 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
     if NEGATIVE_PROMPT_NODE in workflow:
         workflow[NEGATIVE_PROMPT_NODE]["inputs"]["text"] = ""
 
-    # Set face image for ReActor
+    # Set face image for ReActor — upload to ComfyUI input dir first if needed
     if FACE_IMAGE_NODE in workflow:
-        workflow[FACE_IMAGE_NODE]["inputs"]["image"] = os.path.basename(HEATHER_FACE_IMAGE)
+        face_name = ensure_face_image_uploaded() or os.path.basename(HEATHER_FACE_IMAGE)
+        workflow[FACE_IMAGE_NODE]["inputs"]["image"] = face_name
 
     # Set FLUX guidance (replaces CFG for FLUX models)
     if "5" in workflow:
