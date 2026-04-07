@@ -6932,6 +6932,7 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_turn_count[chat_id] = 0
     user_escalation_level[chat_id] = 0
     session_state.pop(chat_id, None)  # Clear session state for fresh start
+    photo_send_times[chat_id] = []    # Reset photo cap counter
     # Delete persisted conversation file so it doesn't reload on next restart
     conv_file = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
     try:
