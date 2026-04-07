@@ -6390,9 +6390,7 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
     if POSITIVE_PROMPT_NODE in workflow:
         workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
 
-    # FLUX negative prompt stays empty
-    if NEGATIVE_PROMPT_NODE in workflow:
-        workflow[NEGATIVE_PROMPT_NODE]["inputs"]["text"] = ""
+    # Negative prompt is set in the workflow JSON directly — do not overwrite it here
 
     # Set face image for ReActor — upload to ComfyUI input dir first if needed
     if FACE_IMAGE_NODE in workflow:
