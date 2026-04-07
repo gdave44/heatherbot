@@ -6323,11 +6323,40 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
             role = "User" if msg["role"] == "user" else persona_name
             history_text += f"{role}: {msg['content']}\n"
 
+        # Build a character context summary from the persona YAML so the LLM
+        # can infer appropriate settings (job, locations, lifestyle).
+        char_context_parts = []
+        p = personality.personality
+        occupation = p.get('identity', {}).get('occupation', '')
+        if occupation:
+            char_context_parts.append(f"Occupation: {occupation}")
+        locations = p.get('locations', {})
+        current_area = locations.get('current_area', '')
+        if current_area:
+            char_context_parts.append(f"Location: {current_area}")
+        hangouts = locations.get('hangout_spots', [])
+        if hangouts:
+            spots = ', '.join(s.get('name', '') for s in hangouts if s.get('name'))
+            if spots:
+                char_context_parts.append(f"Frequents: {spots}")
+        typical_dress = p.get('physical', {}).get('typical_dress', {})
+        if typical_dress:
+            dress_parts = [f"{k}: {v}" for k, v in typical_dress.items()]
+            char_context_parts.append("Typical outfits — " + '; '.join(dress_parts))
+        # Any explicit image context hint from the YAML
+        img_context = p.get('physical', {}).get('image_prompt', {}).get('setting_context', '')
+        if img_context:
+            char_context_parts.append(f"Setting context: {img_context}")
+
+        char_context = '\n'.join(char_context_parts)
+
         system_prompt = (
             "You are a fill-in assistant for a FLUX image generator.\n"
             "You will be given an ANCHOR (the user's exact photo request, already cleaned) "
             "and optional conversation history.\n\n"
-            "YOUR ONLY JOB: add a short setting and pose if the anchor does not already include them.\n"
+            + (f"CHARACTER CONTEXT (use to infer plausible settings and poses):\n{char_context}\n\n" if char_context else "")
+            + "YOUR ONLY JOB: add a short setting and pose if the anchor does not already include them.\n"
+            "- Use the character context above to pick a realistic setting that fits this character.\n"
             "- If the anchor already specifies a location, DO NOT add another one.\n"
             "- If the anchor already specifies a pose or activity, DO NOT add another one.\n"
             "- NEVER change, replace, or reword the anchor text.\n"
