@@ -419,6 +419,61 @@ class PersonalityLoader:
             ]))
         return random.choice(responses)
     
+    def get_image_prompt_prefix(self, nsfw: bool = False) -> str:
+        """Build the character description prefix for ComfyUI image prompts.
+
+        Priority order:
+        1. physical.image_prompt.nsfw_prefix / sfw_prefix  (explicit override in YAML)
+        2. Auto-built from physical.hair, physical.eyes, physical.body_type, identity.age
+        3. Hardcoded fallback constants
+        """
+        phys = self.personality.get('physical', {})
+        img = phys.get('image_prompt', {})
+
+        key = 'nsfw_prefix' if nsfw else 'sfw_prefix'
+        if key in img and img[key]:
+            return img[key].rstrip(', ') + ', '
+
+        # Auto-build from individual physical fields
+        parts = []
+        age = self.personality.get('identity', {}).get('age')
+        if age:
+            parts.append(f"{age}-year-old")
+        parts.append("woman")
+        if phys.get('hair'):
+            parts.append(f"with {phys['hair'].lower()}")
+        if phys.get('eyes'):
+            parts.append(f"and {phys['eyes'].lower()} eyes")
+        if phys.get('body_type'):
+            parts.append(f"{phys['body_type'].lower()} body")
+        if nsfw and phys.get('breast_description'):
+            parts.append(phys['breast_description'].lower())
+        elif not nsfw and phys.get('chest_description'):
+            parts.append(phys['chest_description'].lower())
+
+        if parts:
+            return 'a ' + ' '.join(parts) + ', '
+
+        # Fallback to hardcoded constants
+        return HEATHER_PROMPT_PREFIX_NSFW if nsfw else HEATHER_PROMPT_PREFIX_SFW
+
+    def get_image_quality_suffix(self, nsfw: bool = False) -> str:
+        """Return the quality/style suffix appended to every image prompt.
+
+        Priority order:
+        1. physical.image_prompt.nsfw_quality_suffix / quality_suffix  (YAML override)
+        2. Hardcoded fallback constants
+        """
+        phys = self.personality.get('physical', {})
+        img = phys.get('image_prompt', {})
+
+        key = 'nsfw_quality_suffix' if nsfw else 'quality_suffix'
+        if key in img and img[key]:
+            suffix = img[key]
+            return suffix if suffix.startswith(',') else ', ' + suffix
+
+        return HEATHER_PROMPT_SUFFIX_NSFW if nsfw else HEATHER_PROMPT_SUFFIX
+
     def get_system_prompt(self, mode: str = 'chat') -> str:
         """Build system prompt from YAML or use default"""
         prompt_data = self.personality.get('prompts', {})
@@ -6202,20 +6257,18 @@ def _get_pose_nsfw_description(pose_id: str) -> str:
 
 def build_heather_prompt(user_description: str) -> str:
     user_description = user_description.strip().lower()
-    remove_prefixes = ["you ", "heather ", "her ", "she "]
+    persona_name = personality.name.lower()
+    remove_prefixes = ["you ", f"{persona_name} ", "her ", "she "]
     for prefix in remove_prefixes:
         if user_description.startswith(prefix):
             user_description = user_description[len(prefix):]
     # Detect if description is NSFW — use anatomy tokens only for nude/explicit prompts
     is_nsfw = _is_nsfw_context(user_description)
-    if is_nsfw:
-        prefix = HEATHER_PROMPT_PREFIX_NSFW.rstrip(', ')
-        suffix = HEATHER_PROMPT_SUFFIX_NSFW
-    else:
-        prefix = HEATHER_PROMPT_PREFIX_SFW.rstrip(', ')
-        suffix = HEATHER_PROMPT_SUFFIX
+    # Pull character description and quality suffix from the persona profile
+    char_prefix = personality.get_image_prompt_prefix(nsfw=is_nsfw).rstrip(', ')
+    quality_suffix = personality.get_image_quality_suffix(nsfw=is_nsfw)
     # Description goes FIRST (framing/pose cues get max CLIP weight), then character details
-    return f"{user_description}, {prefix}{suffix}"
+    return f"{user_description}, {char_prefix}{quality_suffix}"
 
 def generate_heather_image(user_description: str, progress_callback=None) -> bytes:
     """Generate image with ComfyUI using FLUX.1 dev pipeline"""

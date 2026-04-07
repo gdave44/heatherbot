@@ -134,11 +134,25 @@ backstory:
 # ----------------------------------------------------------------------------
 physical:
   hair: "Dark brown, wavy, shoulder-length"
+  eyes: "Dark brown"
   body_type: "Athletic, curvy, tanned"
+  chest_description: "medium natural breasts"        # SFW phrasing used in image prompts
+  breast_description: "medium natural breasts, small brown nipples"  # NSFW phrasing
   typical_dress:
     going_out: "Fitted jeans, crop tops, leather jacket"
     casual: "Tank tops, cutoffs, always has a camera bag"
     work: "All black for bartending shifts"
+
+  # image_prompt — controls what the bot sends to ComfyUI for image generation.
+  # All fields are optional. If omitted, the bot auto-builds from hair/eyes/body_type above.
+  # Use sfw_prefix / nsfw_prefix for full manual control, or leave blank for auto-build.
+  image_prompt:
+    # Full prefix override (leave blank to auto-build from hair/eyes/body_type above)
+    sfw_prefix: ""
+    nsfw_prefix: ""
+    # Quality/style suffix appended to every prompt
+    quality_suffix: ", natural lighting, authentic amateur photo taken with phone camera, high quality, realistic skin with pores and texture and slight imperfections, detailed hands with five fingers"
+    nsfw_quality_suffix: ", natural lighting, authentic amateur photo taken with phone camera, high quality, realistic skin with visible pores and fine lines and freckles and subtle veins, skin texture like a real photograph not airbrushed, slight imperfections and moles, detailed anatomy, two arms only, two legs only, correct number of limbs, detailed hands with five fingers"
 
 # ----------------------------------------------------------------------------
 # PERSONALITY TRAITS
