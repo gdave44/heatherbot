@@ -3844,16 +3844,29 @@ NSFW_SELFIE_DESCRIPTIONS = [
 ]
 
 def _is_nsfw_context(text: str) -> bool:
-    """Check if text contains NSFW/intimate context."""
-    nsfw_words = ["nude", "naked", "topless", "tits", "boobs", "ass", "pussy",
-                  "nudes", "strip", "undress", "take it off", "take off",
-                  "nothing on", "no clothes", "without clothes", "bare",
-                  "show me everything", "show it all", "sexy pic",
-                  "naughty", "dirty pic", "spicy", "risque",
-                  "titties", "nipple", "nipples", "breasts", "chest",
-                  "flash me", "flash your", "show your body",
-                  "nsfw", "explicit", "x rated", "x-rated",
-                  "show me your body", "full body", "everything off"]
+    """Check if text contains explicit NSFW/intimate context.
+
+    Words must be unambiguously sexual/nude — avoid broad terms like 'bare',
+    'breasts', 'chest', or 'full body' that appear in clothed photo descriptions.
+    """
+    nsfw_words = [
+        # Unambiguous nudity
+        "nude", "naked", "topless", "nudity", "nudes",
+        # Explicit anatomy
+        "tits", "titties", "boobs", "nipple", "nipples", "pussy", "cock", "dick",
+        # Undressing intent
+        "strip", "undress", "take it off", "take off your", "take them off",
+        "nothing on", "wearing nothing", "no clothes", "without clothes",
+        "everything off", "clothes off",
+        # Explicit requests
+        "show me everything", "show it all", "show your body", "show me your body",
+        "flash me", "flash your",
+        # Labels
+        "nsfw", "explicit", "x rated", "x-rated",
+        # Contextual (only as phrases, not standalone words)
+        "bare breasts", "bare chest", "bare body", "bare ass", "bare skin",
+        "sexy pic", "dirty pic", "naughty pic", "spicy pic",
+    ]
     text_lower = text.lower()
     return any(w in text_lower for w in nsfw_words)
 
@@ -6347,23 +6360,30 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
 
     return _clean_photo_request(user_request)
 
-def build_heather_prompt(user_description: str) -> str:
+def build_heather_prompt(user_description: str, is_nsfw: Optional[bool] = None) -> str:
     user_description = user_description.strip().lower()
     persona_name = personality.name.lower()
     remove_prefixes = ["you ", f"{persona_name} ", "her ", "she "]
     for prefix in remove_prefixes:
         if user_description.startswith(prefix):
             user_description = user_description[len(prefix):]
-    # Detect if description is NSFW — use anatomy tokens only for nude/explicit prompts
-    is_nsfw = _is_nsfw_context(user_description)
+    # Use caller-supplied NSFW flag if provided (determined from original request before
+    # context expansion), otherwise fall back to checking the expanded description.
+    if is_nsfw is None:
+        is_nsfw = _is_nsfw_context(user_description)
     # Pull character description and quality suffix from the persona profile
     char_prefix = personality.get_image_prompt_prefix(nsfw=is_nsfw).rstrip(', ')
     quality_suffix = personality.get_image_quality_suffix(nsfw=is_nsfw)
     # Description goes FIRST (framing/pose cues get max CLIP weight), then character details
     return f"{user_description}, {char_prefix}{quality_suffix}"
 
-def generate_heather_image(user_description: str, progress_callback=None) -> bytes:
-    """Generate image with ComfyUI using FLUX.1 dev pipeline"""
+def generate_heather_image(user_description: str, progress_callback=None, is_nsfw: Optional[bool] = None) -> bytes:
+    """Generate image with ComfyUI using FLUX.1 dev pipeline.
+
+    is_nsfw: if supplied (determined from the original request before context
+    expansion), it is used as-is so that expansion artifacts don't flip the
+    clothed/nude decision.  If None, inferred from user_description.
+    """
     stats['comfyui_requests'] += 1
 
     is_online, status_msg = check_comfyui_status()
@@ -6376,10 +6396,13 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
         raise Exception("Workflow not loaded")
 
     workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
-    full_prompt = build_heather_prompt(user_description)
-    is_nsfw = _is_nsfw_context(user_description)
+    # Resolve NSFW flag — prefer caller-supplied value (from original request before
+    # context expansion) so the expanded description can't accidentally flip it.
+    if is_nsfw is None:
+        is_nsfw = _is_nsfw_context(user_description)
+    full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
     if BREADCRUMB_LOGGING:
-        main_logger.info(f"[COMFYUI] prompt → {full_prompt}")
+        main_logger.info(f"[COMFYUI] nsfw={is_nsfw} | prompt → {full_prompt}")
 
     # Randomize seeds (FLUX workflow: node 7 = main KSampler, node 14 = face blend KSampler)
     for node_id in ["7", "14"]:
@@ -7715,6 +7738,11 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         else:
             clean_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
 
+    # Lock in NSFW status from the original request BEFORE context expansion.
+    # This prevents the expanded description from flipping clothed → nude via
+    # incidental NSFW words introduced by the LLM or conversation history.
+    original_is_nsfw = _is_nsfw_context(clean_desc)
+
     # Expand the user's request using chat context and the LLM before sending to ComfyUI
     loop = asyncio.get_running_loop()
     clean_desc = await loop.run_in_executor(
@@ -7747,7 +7775,7 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             loop = asyncio.get_running_loop()
             image_data = await loop.run_in_executor(
                 None,
-                lambda: generate_heather_image(description)
+                lambda: generate_heather_image(description, is_nsfw=original_is_nsfw)
             )
 
             if image_data and is_valid_image_data(image_data):
