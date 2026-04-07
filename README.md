@@ -6,8 +6,6 @@ HeatherBot is a Telegram bot (Bot API via python-telegram-bot) that runs entirel
 
 The ecosystem includes the core Telegram companion bot, a multi-platform outreach dashboard (Reddit + FetLife), and an autonomous management agent — all running locally.
 
-The thesis: a well-scaffolded 12B parameter model with the right persona engineering, adaptive kink personas, content pipeline, and post-processing can deliver a compelling companion experience that rivals cloud-hosted solutions — while keeping everything private and under your control.
-
 ## Architecture
 
 ```
@@ -44,318 +42,284 @@ The thesis: a well-scaffolded 12B parameter model with the right persona enginee
 |---------|------|---------|
 | llama-server | 1234 | Text generation (llama.cpp with any GGUF model) |
 | Ollama | 11434 | Image analysis (LLaVA or similar vision model) |
-| ComfyUI | 8188 | Image generation (FLUX.1 dev FP8 or SDXL) with face-swap workflows |
+| ComfyUI | 8188 | Image generation (FLUX.1 dev) with face-swap workflows |
 | Chatterbox TTS | 5001 | Voice synthesis (voice cloning) |
 | Bot Monitor | 8888 | Web dashboard for analytics and admin |
 | Frank Dashboard | 8080 | Multi-platform outreach (Reddit + FetLife auto-funnel) |
 | Discord Bot | — | Community server with scheduled posting and auto-welcome |
-| Twitter/X | — | Automated tweeting via Tweepy (Jen Dvorak persona) |
+| Twitter/X | — | Automated tweeting via Tweepy |
 
 ## Features
 
 ### Core Bot (Telegram)
-- **Persona YAML system** — Define your character's identity, backstory, personality, communication style, and sexual boundaries in a single YAML file. Swap personas by pointing to a different file.
-- **Bot API** — Standard Telegram bot using a BotFather token. Receives messages via long-polling. Admin commands are sent directly to the bot.
-- **Adaptive kink personas** — 17 kink-specific personality variants (breeding, CNC, BBC, MILF, anal, domme, etc.) that auto-detect each user's primary kink and shift the character's emphasis to match.
-- **Per-user memory system** — 4-layer personalization: kink scoring (21 categories), memorable moments, LLM session summaries, and callback prompts. Each user gets a persistent profile that grows over time.
-- **Image generation** — FLUX.1 dev FP8 via ComfyUI with runtime LoRA injection, face-swap, and body-accurate NSFW prompts with negative prompt support.
-- **Image analysis** — Receives and analyzes user photos via Ollama vision models (LLaVA).
-- **Voice messages** — Chatterbox TTS voice cloning for sending voice notes that sound like the character.
-- **Story system** — Pre-written story bank (YAML) with 60/40 banked/LLM-generated split, per-user rotation.
-- **Video delivery** — Pre-cached video library with offer-and-deliver flow. Bot API file_ids are permanent — no re-upload needed after the first send.
-- **Content tier system** — FREE (teased NSFW) → FAN (explicit, 50 stars) → VIP (unrestricted, 200 stars). Telegram Stars integration via companion payment bot with deep-linked tip prompts.
-- **Post-processing pipeline** — 7-stage filter: strips thinking tags, asterisk actions, bracketed metadata, GLM artifacts, AI denial claims, unprompted AI self-identification, and quote wrapping. Optional human imperfections (typos, abbreviations) at 12% chance for realism.
-- **Monitoring dashboard** — Real-time Flask dashboard with user analytics, conversation logs, and conversion funnels.
-- **Content safety** — CSAM flag-and-review system, blocked user management, admin alerts, gender violation detection.
-- **AI disclosure** — Automatic first-message disclosure, bio tag, reality-check responses that own the AI status without breaking character.
-- **Re-engagement** — Automatic outreach to inactive users using in-memory conversation activity tracking. Configurable timing and personalized callbacks based on conversation history.
-- **Breeding/CNC injection** — Contextual breeding and CNC fantasy prompts that inject based on keyword detection or conversation energy level.
-- **Domme mode** — Detects humiliation/degradation requests and switches to dominant personality overlay.
-- **Arousal tracking** — Detects climax/heated/afterglow states and adjusts responses accordingly.
-- **Single-char spam detection** — Catches rapid single-character message spam and responds with canned messages instead of burning LLM tokens.
-- **Meetup/verification deflection** — Persistent deflection for meetup requests and verification demands, carries across multiple messages.
+- **Persona YAML system** — Define your character's identity, backstory, personality, physical description, and communication style in a single YAML file. Swap personas by pointing to a different file.
+- **Bot API** — Standard Telegram bot using a BotFather token. Receives messages via long-polling. No phone number or session file required.
+- **Conversation persistence** — Chat history is saved to `/app/data/conversations/<chat_id>.json` and reloaded on restart. History survives container rebuilds.
+- **Gender detection** — Detects user gender from early messages and injects pronoun context into the LLM system prompt for accurate responses.
+- **Image generation** — FLUX.1 dev via ComfyUI with:
+  - Context-aware prompt expansion (LLM reads the last 10 chat messages to infer setting and pose)
+  - Persona profile injected into prompt expansion (occupation, locations, typical outfits)
+  - Runtime LoRA injection (NSFW Master, anatomy detail) with ComfyUI availability check — missing LoRAs are logged and skipped gracefully
+  - Face image auto-upload to ComfyUI's input directory on first generation
+  - Two-pass NSFW detection (unambiguous terms + anatomy/qualifier regex) with flag locked from original request before context expansion
+  - Negative prompt preserved from workflow JSON (not overwritten by the bot)
+  - OOM retry — detects CUDA out-of-memory errors, waits 5 seconds, retries once
+  - Photo cap configurable via `PHOTO_CAP` env var; reset on `/reset`
+- **Image analysis** — Receives and analyzes user photos via Ollama vision models.
+- **Voice messages** — Chatterbox TTS voice cloning for sending voice notes.
+- **Story system** — Pre-written story bank with per-user rotation.
+- **Monitoring dashboard** — Real-time Flask dashboard at port 8888. Access controlled by IP allowlist (`MONITOR_ALLOWED_IPS`) with CIDR subnet support.
+- **Breadcrumb logging** — Detailed pipeline tracing (incoming messages, AI replies, ComfyUI prompts) gated behind `BREADCRUMB_LOGGING=1`.
+- **Content safety** — CSAM flag-and-review system, blocked user management, admin alerts.
+- **AI disclosure** — Automatic first-message disclosure that includes the persona name. Reality-check responses own the AI status without breaking character.
+- **Re-engagement** — Automatic outreach to inactive users. Configurable timing.
+- **Adaptive kink personas** — 17 kink-specific personality overlays that detect and shift based on user behavior.
+- **Arousal tracking** — Detects climax/heated/afterglow states and adjusts token budget and temperature accordingly.
+- **Post-processing pipeline** — Strips thinking tags, asterisk actions, AI denial claims, and unprompted self-identification.
 
-### Kink Persona System
-- **17 adaptive personas** — breeding, MILF/age-gap, CNC/rough, cuckold, BBC/size, GFE/intimate, deepthroat/oral, gangbang, voyeur/exhib, domme/mommy, anal, free-use, forced-bi, body-worship, findom, stepfamily, uber-slut
-- **Automatic detection** — 21 keyword categories score every user message in real-time
-- **Phased injection** — Messages 1-3: warmth (no persona). Messages 4-9: light hints. Messages 10+: full persona injection with specific phrases, session flow, and cuckold integration.
-- **Per-user tracking** — Active persona stored in each user's profile JSON with kink name and score
-- **Persona definitions** in `heather_kink_personas.yaml` — each persona includes core traits, verbal responses, physical details, session flow, and cuckold/Frank integration
+### Image Generation Pipeline
 
-### Frank Dashboard (Multi-Platform Outreach)
-- **Reddit + FetLife automation** — Playwright browser manages Reddit conversations; OpenClaw managed browser handles FetLife messaging and content posting
-- **Stage-aware Frank AI** — Dolphin 12B generates responses as "Frank" (cuckold husband character) with 3-stage conversation strategy: rapport building → Telegram pitch → post-pitch follow-up
-- **Auto-send** — Replies are automatically queued with 2-8 minute random delays (human texting pace). Hold keywords flag risky messages for manual review.
-- **Reddit chat layers** — Handles standard chats, regular Requests, and NSFW Additional Requests (all three layers automated)
-- **Catch-up replier** — Background task scans database every 2 minutes for conversations where the last message is inbound and auto-replies
-- **Unified dashboard** — Web UI at port 8080 with platform badges (R/FL), conversation management, AI suggestion approval, and metrics
-- **Frank Content API** — Shared content generation endpoint for consistent Frank voice across all platforms
-- **Self-healing watchdog** — Monitors dashboard health, browser status, and message flow. Auto-fixes common failures and escalates to Claude Code CLI when self-healing fails.
+```
+User request
+  → _clean_photo_request()         strip conversational framing
+  → NSFW flag locked in            from original request (before expansion)
+  → build_image_prompt_from_context()  LLM expands with chat history + persona profile
+  → build_heather_prompt()         prepend character description from persona YAML
+  → ComfyUI /prompt                workflow submitted with face image, LoRAs, seeds
+```
 
-### Discord Bot
-- **Auto-channel creation** — Sets up introductions, heather-pics, stories, rate-my-dick channels on join
-- **Scheduled image posting** — Posts character images every 4 hours
-- **Daily story posting** — Publishes LLM-generated stories once per day
-- **New member welcome** — Automatic greeting with character introduction
-- **Commands** — `/pic` (send image), `/invite` (generate invite link)
+The character description prefix (hair, eyes, body type, breast description) is read from the `physical:` section of the persona YAML. Explicit SFW/NSFW prefix overrides and quality suffixes can be set in `physical.image_prompt`.
 
-### Twitter/X Bot (Jen Dvorak Persona)
-- **Separate character** — Jen Dvorak (@UberSlutty), an Uber-driving slut mom persona defined in `jen_twitter_persona.yaml`
-- **Automated tweeting** — 3 posts/day via Tweepy (morning, afternoon, evening)
-- **Content mix** — 8 tweet types: uber stories, mom contrast, body confidence, horniness, tip humor, morning/evening shift, funnel
-- **Curated video library** — Video classification pipeline using llama3.2-vision (86% accuracy) identifies car-interior content for on-brand tweets
-- **Funnel integration** — 1 in 5 tweets soft-plugs Telegram/Discord for conversion
+### Persona YAML — `physical.image_prompt` section
 
-### Autonomous Management (OpenClaw MGMT)
-- **Heartbeat monitoring** — 30-minute cycle checks all services, error rates, engagement metrics
-- **Scheduling ownership** — All recurring tasks (Twitter posting, FetLife replier, dashboard watchdog, video classification) run from OpenClaw heartbeat
-- **Dashboard monitoring** — Confirms Frank Dashboard health, reports metrics every 4 hours
-- **Kink persona reporting** — Scans user profiles for persona distribution, reports trends
-- **Personality tuning** — Authorized to edit persona YAML directly for prompt tweaks
-- **User engagement research** — Analyzes bot logs for satisfaction patterns, builds optimization briefs
-- **Dashboard restart** — Authorized to restart the Frank Dashboard (but NOT HeatherBot)
-- **Delegation model** — OpenClaw diagnoses and recommends; Claude Code implements all code changes
+```yaml
+physical:
+  hair: "Dark brown, wavy, shoulder-length"
+  eyes: "Brown"
+  body_type: "Athletic, curvy"
+  chest_description: "medium natural breasts"       # SFW image prompt
+  breast_description: "medium natural breasts, small brown nipples"  # NSFW image prompt
+
+  image_prompt:
+    sfw_prefix: ""          # Full override (blank = auto-build from fields above)
+    nsfw_prefix: ""
+    quality_suffix: ", natural lighting, authentic amateur photo..."
+    nsfw_quality_suffix: ", natural lighting, realistic skin with pores..."
+    setting_context: ""     # Optional hint for setting inference (e.g. "at a bar or spa")
+```
+
+### Monitoring Dashboard
+
+Access is controlled by IP allowlist, not a shared token. Set `MONITOR_ALLOWED_IPS` in `.env`:
+
+```env
+MONITOR_ALLOWED_IPS=192.168.1.0/24,10.0.0.1
+```
+
+Supports individual IPs and CIDR ranges. Defaults to `127.0.0.1,::1` (localhost only).
 
 ## Hardware Requirements
 
 **Minimum:**
-- 1x GPU with 24GB VRAM (RTX 3090, RTX 4090, etc.)
+- 1× GPU with 24GB VRAM (RTX 3090, RTX 4090, etc.)
 - 32GB system RAM
 - Python 3.10+
 
 **Recommended:**
-- 2x GPUs (one for text, one for image generation)
+- 2× GPUs (one for text, one for image generation)
 - 64GB+ system RAM
 - SSD for model storage
 
-The bot is designed for consumer hardware. A single RTX 3090 can run the text model, image analysis, and TTS simultaneously. Image generation benefits from a second GPU.
-
 ## Prerequisites
 
-Install these before setting up the bot:
-
-1. **[llama.cpp](https://github.com/ggerganov/llama.cpp)** — Download a GGUF model (12B+ recommended) and the `llama-server` binary
-2. **[Ollama](https://ollama.ai)** — Install and pull a vision model: `ollama pull llava`
+1. **[llama.cpp](https://github.com/ggerganov/llama.cpp)** — Download a GGUF model and `llama-server`
+2. **[Ollama](https://ollama.ai)** — Pull a vision model: `ollama pull llava`
 3. **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — For image generation (optional)
 4. **[Chatterbox TTS](https://github.com/resemble-ai/chatterbox)** — For voice messages (optional)
-5. **[Playwright](https://playwright.dev/)** — For Reddit/FetLife dashboard: `playwright install chromium`
-6. **Python 3.10+**
-7. **Telegram bot token** — Create a bot via [@BotFather](https://t.me/BotFather) and save the token
+5. **Python 3.10+**
+6. **Telegram bot token** — Create a bot via [@BotFather](https://t.me/BotFather)
 
-## Installation
+## Docker Deployment
+
+The recommended way to run HeatherBot is via Docker Compose. The image clones the latest code from GitHub on every build, so there is no stale code in the container.
 
 ```bash
-# Clone the repo
-git clone https://github.com/youruser/heatherbot.git
+# Build and start
+docker compose up -d heatherbot
+
+# Force rebuild to pull latest code from GitHub
+docker compose build --no-cache heatherbot && docker compose up -d heatherbot
+
+# View logs
+docker compose logs -f heatherbot
+```
+
+### Volumes
+
+| Host path | Container path | Purpose |
+|-----------|---------------|---------|
+| `./heatherbot/data` | `/app/data` | Conversation history, user state |
+| `./heatherbot/config` | `/app/config` | Persona YAML, ComfyUI workflow JSON, face image |
+
+Place your persona YAML, `workflow_flux.json`, and `heather_face.png` in `./heatherbot/config/` before starting.
+
+### docker-compose.yml
+
+```yaml
+services:
+  heatherbot:
+    build:
+      context: ./heatherbot
+      dockerfile: Dockerfile
+    container_name: heatherbot
+    restart: unless-stopped
+    networks:
+      - ollama-net
+    env_file:
+      - ./heatherbot/.env
+    ports:
+      - 8888:8888
+    volumes:
+      - ./heatherbot/data:/app/data
+      - ./heatherbot/config:/app/config
+    depends_on:
+      - ollama
+
+networks:
+  ollama-net:
+    external: true
+```
+
+## Manual Installation
+
+```bash
+git clone https://github.com/gdave44/heatherbot.git
 cd heatherbot
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure environment
 cp .env.example .env
-# Edit .env with your bot token and admin user ID
+# Edit .env with your credentials
 ```
 
 ## Configuration
 
-### 1. Environment Variables
+### Environment Variables
 
-Edit `.env` with your credentials (see `.env.example` for all options):
+See `.env.example` for all options. Key variables:
 
 ```env
+# Telegram
 TELEGRAM_BOT_TOKEN=your_botfather_token
-ADMIN_USER_ID=your_telegram_user_id
+ADMIN_USER_ID=your_telegram_numeric_id
+
+# Persona
+HEATHER_PERSONA=my_persona.yaml
+
+# LLM / AI services
+MODEL=dolphin-llama3:8b
+LLM_URL=http://ollama:11434
+TTS_URL=http://kokoro:8000
+COMFYUI_URL=http://comfyui:8188
+
+# ComfyUI assets (place files in config volume)
+COMFYUI_WORKFLOW_FILE=/app/config/workflow_flux.json
+COMFYUI_FACE_IMAGE=/app/config/heather_face.png
+
+# Photo cap
+PHOTO_CAP=5                   # Max photos per rolling window (default: 5)
+PHOTO_CAP_WINDOW_HOURS=2      # Rolling window in hours (default: 2)
+
+# Monitoring dashboard
+MONITOR_ALLOWED_IPS=127.0.0.1,::1   # IPs or CIDR ranges allowed access
+
+# Debugging
+BREADCRUMB_LOGGING=0          # Set to 1 for full pipeline trace logs
 ```
 
-`TELEGRAM_BOT_TOKEN` is the token provided by [@BotFather](https://t.me/BotFather) when you create the bot. `ADMIN_USER_ID` is your personal Telegram numeric user ID — admin commands sent to the bot from this account are treated as privileged.
+### Persona YAML
 
-### 2. Persona YAML
+The bot ships with `persona_example.yaml` — a complete template. To create your own:
 
-The bot ships with `persona_example.yaml` — a complete template with a fictional character. To create your own:
-
-1. Copy `persona_example.yaml` to `my_persona.yaml`
-2. Edit every section with your character's details
-3. Run with `--personality my_persona.yaml`
+1. Copy `persona_example.yaml` to `config/my_persona.yaml`
+2. Edit all sections
+3. Set `HEATHER_PERSONA=my_persona.yaml` in `.env`
 
 Key sections:
-- **identity** — Name, age, location, occupation, relationships
-- **personality** — Traits, humor, flaws
+- **identity** — Name, age, location, occupation
+- **physical** — Hair, eyes, body type, `image_prompt` overrides for ComfyUI
+- **personality** — Traits, humor
 - **communication** — Voice, phrases, flirting patterns
-- **sexual** — Preferences, boundaries, breeding/CNC fantasies
-- **ai_behavior** — Rules, guardrails, mode behaviors
-- **prompts** — The system prompts sent to the LLM (most important section)
+- **ai_behavior** — Guardrails, never-say list, mode behaviors
+- **prompts** — The system prompts sent to the LLM (`base_personality` is the most important)
 
-### 3. Kink Personas (Optional)
+### ComfyUI Setup
 
-The bot ships with `heather_kink_personas.yaml` containing 17 kink-specific personality overlays. These are automatically applied based on user behavior — no configuration needed.
+1. Place your FLUX workflow JSON at `config/workflow_flux.json`
+2. Place a face source image at `config/heather_face.png`
+3. The bot uploads the face image to ComfyUI's input directory automatically on first generation
+4. Edit negative prompts directly in the workflow JSON — the bot does not overwrite node 4
+5. LoRAs (`NSFW_master.safetensors`, `flux-female-anatomy.safetensors`) are optional — the bot checks ComfyUI's available LoRA list at runtime and skips any that are not installed
 
-To add a custom kink persona:
-1. Add a new entry in `heather_kink_personas.yaml`
-2. Add keyword triggers in `user_memory.py` → `KINK_KEYWORDS`
-3. Add the mapping in `user_memory.py` → `KINK_TO_PERSONA`
-
-### 4. Story Bank (Optional)
-
-Create a `heather_stories.yaml` (or whatever you name it) with pre-written stories:
-
-```yaml
-stories:
-  - key: "story_beach_001"
-    kinks: ["romance", "outdoor"]
-    content: |
-      Your story text here...
-```
-
-## Usage
-
-### Starting Services
-
-Start your backend services first:
+## Running the Bot
 
 ```bash
-# Text AI (llama-server)
-llama-server -m /path/to/model.gguf --host 0.0.0.0 --port 1234 -ngl 99 -c 32768
-
-# Image analysis (Ollama)
-ollama serve  # Usually auto-starts
-
-# Image generation (ComfyUI — optional)
-cd /path/to/ComfyUI && python main.py
-
-# Voice (Chatterbox TTS — optional)
-python heather_tts_service.py
-```
-
-### Running the Bot
-
-```bash
-# Basic (text-only, no dashboard)
+# Basic
 python heather_telegram_bot.py
 
-# Full setup (monitoring + optimized for 12B models)
-python heather_telegram_bot.py --monitoring --small-model
+# With monitoring dashboard
+python heather_telegram_bot.py --monitoring
 
-# Custom persona
+# Custom persona + monitoring
 python heather_telegram_bot.py --personality my_persona.yaml --monitoring
-
-# Full production setup
-python heather_telegram_bot.py --monitoring --small-model --personality heather_personality.yaml --log-dir /path/to/logs
 ```
-
-The bot connects immediately using the BotFather token. No phone number or verification code required.
-
-### Running the Frank Dashboard (Optional)
-
-```bash
-cd heather-reddit
-python -m uvicorn app:app --host 127.0.0.1 --port 8080
-```
-
-Opens two browser windows (Reddit + FetLife) and starts autonomous conversation management.
 
 ### CLI Arguments
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--personality` | `persona_example.yaml` | Persona YAML file path |
+| `--personality` | `persona_example.yaml` | Persona YAML filename (looked up in config dir) |
 | `--monitoring` | off | Enable web dashboard on port 8888 |
-| `--small-model` | off | Optimized prompts for 12B models |
-| `--text-port` | 1234 | llama-server port |
-| `--image-port` | 11434 | Ollama port |
-| `--tts-port` | 5001 | TTS service port |
+| `--small-model` | off | Condensed prompts for smaller models |
+| `--text-port` | 1234 | llama-server port (overridden by `LLM_URL`) |
 | `--log-dir` | `logs/` | Log directory |
-| `--debug` | off | Verbose logging |
 | `--unfiltered` | off | Disable content filters |
 
-### Admin Commands (in Telegram)
+### User Commands (in Telegram)
 
-Send these commands directly to the bot from your admin account (`ADMIN_USER_ID`):
+| Command | Description |
+|---------|-------------|
+| `/start` | Begin conversation |
+| `/help` | Show available commands |
+| `/menu` | Show command menu |
+| `/selfie` | Request a photo (optionally with description) |
+| `/reset` | Clear conversation history and photo cap |
+| `/voice_on` / `/voice_off` | Toggle voice message mode |
 
-- `/admin_stats` — User statistics and engagement metrics
-- `/admin_flags` — Review CSAM flags
-- `/admin_block <user_id>` — Block a user
-- `/admin_unblock <user_id>` — Unblock a user
-- `/takeover <user_id>` — Pause bot for a user (you reply manually via `/say`)
-- `/botreturn <user_id>` — Resume bot for a user
-- `/say <user_id> <message>` — Send a message as Heather during takeover
-- `/admin_reengage_scan` — Show re-engagement candidates from active conversations
-- `/admin_reengage_send <user_id>` — Manually send a re-engagement message
-- `/admin_warmth <user_id>` — Show warmth tier and scoring for a user
-- `/admin_help` — Full list of admin commands
+### Admin Commands (send from your `ADMIN_USER_ID` account)
+
+| Command | Description |
+|---------|-------------|
+| `/admin_stats` | User statistics and engagement metrics |
+| `/admin_flags` | Review CSAM flags |
+| `/admin_block <user_id>` | Block a user |
+| `/admin_unblock <user_id>` | Unblock a user |
+| `/admin_reset <user_id>` | Reset a specific user's conversation |
+| `/takeover <user_id>` | Pause bot and reply manually |
+| `/botreturn <user_id>` | Resume bot after takeover |
+| `/say <user_id> <message>` | Send a message as the character |
+| `/admin_reengage_scan` | Show re-engagement candidates |
+| `/admin_reengage_send <user_id>` | Send a re-engagement message |
+| `/admin_warmth <user_id>` | Show warmth tier for a user |
+| `/admin_help` | Full list of admin commands |
 
 ## White-Labeling
 
-HeatherBot is designed to be re-skinned. To create a completely different character:
+HeatherBot is character-agnostic. All personality comes from the YAML files and media assets.
 
-1. **Create a new persona YAML** — Copy `persona_example.yaml`, change everything
-2. **Create kink personas** — Copy `heather_kink_personas.yaml`, customize for your character
-3. **Provide your own media** — Photos in `images_db/`, videos in `videos/`
-4. **Clone a voice** — Use Chatterbox TTS to clone your character's voice
-5. **Set up face-swap** — Place your character's face source image for ComfyUI
-6. **Update `.env`** — Set `PAYMENT_BOT_USERNAME` to your payment bot's username
-7. **Create a bot** — Register a new bot with [@BotFather](https://t.me/BotFather) and set `TELEGRAM_BOT_TOKEN`
-
-The bot code is character-agnostic. All personality comes from the YAML files and media assets.
-
-## Windows Service Manager
-
-On Windows, use the included PowerShell service manager:
-
-```powershell
-# Interactive menu
-.\heather_services.ps1
-
-# Start all services
-.\heather_services.ps1 startall
-
-# Check status
-.\heather_services.ps1 status
-```
-
-## Project Structure
-
-```
-heather-bot/                    # Core Telegram bot
-  heather_telegram_bot.py       # Main bot (~9K lines, Bot API v4.0)
-  heather_personality.yaml      # Character persona definition
-  heather_kink_personas.yaml    # 17 adaptive kink persona overlays
-  user_memory.py                # Per-user memory + kink scoring
-  postprocess.py                # 7-stage response filter + human imperfections
-  heather_discord_bot.py        # Discord community bot
-  jen_twitter_persona.yaml      # Twitter/X persona definition
-  generate_batch_sdxl.py        # SDXL batch image generator with LoRA stacking
-  faceswap_batch.py             # ReActor face swap batch processor
-  classify_car_v2.py            # Video classifier (llama3.2-vision)
-  hourly_memory_check.py        # Memory consolidation checker
-  generate_pose_skeletons.py    # OpenPose skeleton generator for ControlNet
-  user_profiles/                # Per-user JSON profiles (auto-generated)
-
-heather-reddit/                 # Multi-platform outreach dashboard
-  app.py                        # FastAPI + background tasks + Frank Content API
-  ai_frank.py                   # Stage-aware Frank AI with safety filters
-  frank_content_api.py          # Frank + Jen content generation via Dolphin
-  twitter_poster.py             # Twitter/X posting via Tweepy
-  reddit_monitor.py             # Reddit Playwright automation
-  fetlife_replier.py            # FetLife inbox replier via OpenClaw browser
-  dashboard_watchdog.py         # Self-healing watchdog with Claude Code escalation
-  database.py                   # SQLite with platform support
-  static/                       # Dashboard frontend
-```
-
-## Known Limitations
-
-- **Bot API constraints**: Bots only receive messages sent directly to them — they cannot see messages in chats where they are not a member, and cannot intercept outgoing messages. The re-engagement system uses in-memory conversation tracking rather than scanning Telegram dialogs.
-- **LLM hallucinations**: Small models (7B-12B) occasionally invent backstory details not in the persona YAML. The post-processing pipeline catches some of these but not all.
-- **No conversation-end detection**: The bot doesn't detect when a user has ended the conversation (repeated goodbyes). It will keep replying.
-- **Image generation speed**: ComfyUI FLUX.1 takes 10-30 seconds per image depending on GPU.
-- **FLUX body accuracy ceiling**: ~70% match to reference photos via text prompts alone. Custom LoRA or img2img needed for better body accuracy.
-- **Voice quality**: TTS quality varies. Short utterances work best.
+1. **Create a persona YAML** — Copy `persona_example.yaml`, fill in your character
+2. **Place assets** — Face source image and workflow JSON in `config/`
+3. **Configure LLM** — Set `MODEL` to whichever model you're running in Ollama/llama-server
+4. **Create a bot** — Register with [@BotFather](https://t.me/BotFather), set `TELEGRAM_BOT_TOKEN`
+5. **Optionally clone a voice** — Chatterbox TTS voice cloning
 
 ## Migrating from v3.x (Telethon/MTProto)
 
@@ -366,19 +330,47 @@ v4.0 replaces the Telethon MTProto userbot with the standard Telegram Bot API:
 | `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` | `TELEGRAM_BOT_TOKEN` (from BotFather) |
 | Appears as a real Telegram user | Appears as a bot account |
 | Session file (`heather_session.session`) | No session file — token-based auth |
-| Reads Saved Messages for admin commands | Admin sends commands directly to the bot |
-| `iter_dialogs` for re-engagement scanning | In-memory `conversation_activity` dict |
-| File references expire (needed refresh) | Bot API `file_id`s are permanent |
-| `python-telegram-bot` not required | `python-telegram-bot>=21.0` required |
+| `iter_dialogs` for re-engagement | In-memory `conversation_activity` dict |
+| File references expire | Bot API `file_id`s are permanent |
+| `telethon>=1.36` | `python-telegram-bot>=21.0` |
 
 Update your `.env`: remove `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`, add `TELEGRAM_BOT_TOKEN`.
 
+## Project Structure
+
+```
+heatherbot/
+  heather_telegram_bot.py     # Main bot (Bot API v4.0)
+  persona_example.yaml        # Character template
+  requirements.txt
+  Dockerfile
+  docker-compose.yml
+  .env.example
+
+  config/                     # Mounted volume — place your files here
+    my_persona.yaml
+    workflow_flux.json
+    heather_face.png
+
+  data/                       # Mounted volume — auto-generated at runtime
+    conversations/            # Per-user chat history (JSON)
+    logs/
+```
+
+## Known Limitations
+
+- **Bot API constraints** — Bots only receive messages sent directly to them.
+- **LLM hallucinations** — Small models occasionally invent backstory details not in the persona YAML.
+- **Image generation speed** — ComfyUI FLUX.1 takes 60–120 seconds per image depending on GPU warmth.
+- **FLUX negative prompts** — FLUX.1 dev has weak response to negative prompts vs SDXL. Set them in the workflow JSON directly.
+- **LoRA dependency** — NSFW LoRAs must be installed in ComfyUI separately. The bot checks availability and skips missing ones.
+
 ## Disclaimer
 
-This software is intended for creating AI companion chatbots. It can be configured for adult content.
+This software is for creating AI companion chatbots and can be configured for adult content.
 
-- **You are responsible** for complying with the laws of your jurisdiction regarding adult content, AI-generated media, and automated messaging.
-- **AI disclosure is built in** — the bot automatically discloses its AI nature to new users. Do not disable this.
+- **You are responsible** for complying with applicable laws regarding adult content and automated messaging.
+- **AI disclosure is built in** — the bot discloses its AI nature to new users. Do not disable this.
 - **Content safety systems** (CSAM flagging, blocked user management) are included and should remain active.
 - **This is a local tool** — no data leaves your machine unless you configure it to.
 
