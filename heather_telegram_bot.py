@@ -3048,6 +3048,13 @@ PROACTIVE_PHOTO_MIN_TURNS = 8       # Min conversation turns before proactive pi
 PROACTIVE_PHOTO_CHANCE = 0.05       # 5% chance per message after min turns (was 8%)
 PROACTIVE_PHOTO_COOLDOWN = 1800     # 30 min cooldown between proactive photos per user (was 10 min)
 
+# Context-triggered photo settings — fires when user mentions persona's life topics
+CONTEXT_PHOTO_MIN_MSGS = 25         # Earliest a context photo can fire
+CONTEXT_PHOTO_MAX_MSGS = 50         # Latest threshold (randomised per chat)
+CONTEXT_PHOTO_COOLDOWN = 1800       # 30 min cooldown between context photos
+_context_photo_next_trigger: Dict[int, int] = {}   # chat_id → turn count threshold
+_context_photo_last_sent: Dict[int, float] = {}    # chat_id → timestamp
+
 # Photo cap — rolling window (not session-based)
 PHOTO_CAP_WINDOW_HOURS = int(os.getenv("PHOTO_CAP_WINDOW_HOURS", "2"))  # Rolling window size
 photo_send_times: Dict[int, list] = {}  # chat_id -> [timestamp, timestamp, ...]
@@ -3915,6 +3922,174 @@ def should_send_proactive_photo(chat_id: int) -> bool:
         return False
     # Random chance
     return random.random() < PROACTIVE_PHOTO_CHANCE
+
+# ---------------------------------------------------------------------------
+# Context-triggered photo system
+# ---------------------------------------------------------------------------
+
+def _build_context_photo_keywords() -> Dict[str, List[str]]:
+    """Extract topic keywords from the persona YAML grouped by category."""
+    p = personality.personality
+    kws: Dict[str, List[str]] = {
+        'vehicle': [],
+        'location': [],
+        'activity': [],
+    }
+
+    # Vehicle
+    vehicle = p.get('identity', {}).get('vehicle', '')
+    if vehicle:
+        # e.g. "2017 Jeep Wrangler" → ["jeep", "wrangler", "jeep wrangler"]
+        parts = [w.lower() for w in vehicle.split() if len(w) > 2 and not w.isdigit()]
+        kws['vehicle'].extend(parts)
+        kws['vehicle'].append(' '.join(parts))
+
+    # Locations — current area, hangout spots
+    locs = p.get('locations', {})
+    area = locs.get('current_area', '')
+    if area:
+        kws['location'].extend([w.lower() for w in area.split() if len(w) > 3])
+    for spot in locs.get('hangout_spots', []):
+        name = spot.get('name', '').lower()
+        if name:
+            kws['location'].append(name)
+            kws['location'].extend([w for w in name.split() if len(w) > 3])
+    # Previous locations
+    for prev in p.get('identity', {}).get('previous_locations', []):
+        loc_name = prev.get('location', '').lower()
+        if loc_name:
+            kws['location'].extend([w for w in loc_name.split() if len(w) > 3])
+
+    # Activities — occupation, hobbies, backstory keywords
+    occupation = p.get('identity', {}).get('occupation', '')
+    if occupation:
+        kws['activity'].extend([w.lower() for w in occupation.split() if len(w) > 3])
+    for hobby in p.get('personality', {}).get('hobbies', []):
+        kws['activity'].extend([w.lower() for w in str(hobby).split() if len(w) > 3])
+    # Hangout descriptions
+    for spot in locs.get('hangout_spots', []):
+        use = spot.get('use', '').lower()
+        if use:
+            kws['activity'].extend([w for w in use.split() if len(w) > 4])
+
+    # Deduplicate each category
+    return {cat: list(dict.fromkeys(words)) for cat, words in kws.items()}
+
+_context_photo_keywords: Optional[Dict[str, List[str]]] = None  # lazy-init
+
+def _get_context_photo_keywords() -> Dict[str, List[str]]:
+    global _context_photo_keywords
+    if _context_photo_keywords is None:
+        _context_photo_keywords = _build_context_photo_keywords()
+        main_logger.info(f"[CONTEXT_PHOTO] Keywords — "
+                         f"vehicle: {_context_photo_keywords['vehicle'][:5]} | "
+                         f"location: {_context_photo_keywords['location'][:5]} | "
+                         f"activity: {_context_photo_keywords['activity'][:5]}")
+    return _context_photo_keywords
+
+def _detect_context_photo_topic(message: str) -> Optional[str]:
+    """Return the matched topic category ('vehicle'|'location'|'activity') or None."""
+    msg_lower = message.lower()
+    kws = _get_context_photo_keywords()
+    for category, words in kws.items():
+        if any(w and w in msg_lower for w in words):
+            return category
+    return None
+
+def should_send_context_photo(chat_id: int, user_message: str) -> Optional[str]:
+    """Return matched topic if a context-triggered photo should fire, else None.
+
+    Fires when:
+    - The chat has reached the randomised message threshold (25-50 msgs)
+    - The current message mentions the character's vehicle, location, or activities
+    - The per-chat cooldown has elapsed
+    """
+    turns = conversation_turn_count.get(chat_id, 0)
+
+    # Initialise random threshold for this chat
+    if chat_id not in _context_photo_next_trigger:
+        _context_photo_next_trigger[chat_id] = random.randint(
+            CONTEXT_PHOTO_MIN_MSGS, CONTEXT_PHOTO_MAX_MSGS
+        )
+
+    if turns < _context_photo_next_trigger[chat_id]:
+        return None
+
+    if time.time() - _context_photo_last_sent.get(chat_id, 0) < CONTEXT_PHOTO_COOLDOWN:
+        return None
+
+    return _detect_context_photo_topic(user_message)
+
+def _reset_context_photo_trigger(chat_id: int):
+    """Reset the threshold for the next context photo after one fires."""
+    turns = conversation_turn_count.get(chat_id, 0)
+    _context_photo_next_trigger[chat_id] = turns + random.randint(
+        CONTEXT_PHOTO_MIN_MSGS, CONTEXT_PHOTO_MAX_MSGS
+    )
+    _context_photo_last_sent[chat_id] = time.time()
+
+def _build_context_photo_desc(chat_id: int, user_message: str, topic: str) -> str:
+    """Use the LLM to create a scene description fitting the conversation topic."""
+    try:
+        p = personality.personality
+        locs = p.get('locations', {})
+        vehicle = p.get('identity', {}).get('vehicle', '')
+        occupation = p.get('identity', {}).get('occupation', '')
+        hangouts = ', '.join(
+            s.get('name', '') for s in locs.get('hangout_spots', []) if s.get('name')
+        )
+
+        char_hints = []
+        if vehicle:
+            char_hints.append(f"Vehicle: {vehicle}")
+        if occupation:
+            char_hints.append(f"Occupation: {occupation}")
+        if hangouts:
+            char_hints.append(f"Hangout spots: {hangouts}")
+        area = locs.get('current_area', '')
+        if area:
+            char_hints.append(f"Lives in: {area}")
+
+        system_prompt = (
+            "You are a photo prompt writer for a FLUX image generator. "
+            "Given a conversation message and character details, write a SHORT comma-separated "
+            "image description (10-18 words) showing the character in a scene related to the topic.\n"
+            "Rules:\n"
+            "- SFW only — clothed, natural, candid\n"
+            "- No character name or physical description\n"
+            "- Focus on setting, outfit, and candid pose\n"
+            "- Output ONLY the prompt fragment, no explanation\n\n"
+            + ('\n'.join(char_hints))
+        )
+        user_content = (
+            f"Topic triggered: {topic}\n"
+            f"User message: {user_message}\n"
+            "Write a scene description showing the character doing something related to this topic."
+        )
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 60,
+                "stream": False,
+            },
+            timeout=15,
+        )
+        if response.status_code == 200:
+            desc = response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if desc:
+                return desc
+    except Exception as e:
+        main_logger.warning(f"[CONTEXT_PHOTO] LLM description failed: {e}")
+
+    # Fallback — pick a generic SFW description
+    return random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
 
 def _prune_photo_times(chat_id: int):
     """Remove photo timestamps outside the rolling window."""
@@ -7036,6 +7211,8 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_escalation_level[chat_id] = 0
     session_state.pop(chat_id, None)  # Clear session state for fresh start
     photo_send_times[chat_id] = []    # Reset photo cap counter
+    _context_photo_next_trigger.pop(chat_id, None)  # Reset context photo trigger
+    _context_photo_last_sent.pop(chat_id, None)
     # Delete persisted conversation file so it doesn't reload on next restart
     conv_file = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
     try:
@@ -8771,7 +8948,16 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     photo_desc = extract_photo_context_from_response(response)
                     main_logger.info(f"[{request_id}] Response-triggered photo for {chat_id}: {photo_desc[:40]}")
 
-                # Layer 2: Random proactive selfie after enough flirty exchanges (skip COLD)
+                # Layer 2: Context-triggered photo — user mentioned vehicle/location/activity
+                elif get_warmth_tier(chat_id) != "COLD":
+                    ctx_topic = should_send_context_photo(chat_id, user_message)
+                    if ctx_topic:
+                        send_photo = True
+                        photo_desc = _build_context_photo_desc(chat_id, user_message, ctx_topic)
+                        _reset_context_photo_trigger(chat_id)
+                        main_logger.info(f"[{request_id}] Context photo ({ctx_topic}) for {chat_id}: {photo_desc[:50]}")
+
+                # Layer 3: Random proactive selfie after enough flirty exchanges (skip COLD)
                 elif get_warmth_tier(chat_id) != "COLD" and should_send_proactive_photo(chat_id):
                     send_photo = True
                     photo_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
