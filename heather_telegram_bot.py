@@ -6144,7 +6144,8 @@ def get_comfyui_loras() -> set:
 _comfyui_available_loras: Optional[set] = None  # None = not yet fetched
 
 def _lora_available(lora_name: str) -> bool:
-    """Return True if the named LoRA exists in ComfyUI. Fetches list on first call."""
+    """Return True if the named LoRA exists in ComfyUI. Fetches list on first call.
+    Logs a warning whenever a requested LoRA is not found."""
     global _comfyui_available_loras
     if _comfyui_available_loras is None:
         _comfyui_available_loras = get_comfyui_loras()
@@ -6152,7 +6153,10 @@ def _lora_available(lora_name: str) -> bool:
             main_logger.info(f"[COMFYUI] {len(_comfyui_available_loras)} LoRA(s) available")
         else:
             main_logger.warning("[COMFYUI] No LoRAs found or list unavailable")
-    return lora_name in _comfyui_available_loras
+    available = lora_name in _comfyui_available_loras
+    if not available:
+        main_logger.warning(f"[COMFYUI] LoRA not available, bypassing: {lora_name}")
+    return available
 
 def upload_image_to_comfyui(filepath: str) -> Optional[str]:
     """Upload an image file to ComfyUI's input directory. Returns the filename ComfyUI assigned."""
@@ -6416,15 +6420,13 @@ def generate_heather_image(user_description: str, progress_callback=None) -> byt
                 last_clip_node = "21"
                 main_logger.info("NSFW image — NSFW Master + anatomy LoRAs injected")
             else:
-                if needs_anatomy_lora:
-                    main_logger.warning(f"[COMFYUI] {anatomy_lora} not in ComfyUI, skipping anatomy LoRA")
                 main_logger.info("NSFW image — NSFW Master LoRA only")
 
             workflow["7"]["inputs"]["model"] = [last_model_node, 0]
             workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
             workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
         else:
-            main_logger.warning(f"[COMFYUI] {nsfw_lora} not in ComfyUI — generating without NSFW LoRA")
+            main_logger.info("[COMFYUI] NSFW requested but no NSFW LoRA available — generating with base model only")
     # SFW: no LoRAs, use checkpoint directly (already wired in base workflow)
 
     # ControlNet pose injection — detect pose, inject nodes at runtime
