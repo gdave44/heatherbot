@@ -6255,6 +6255,69 @@ def _get_pose_nsfw_description(pose_id: str) -> str:
     return random.choice(NSFW_SELFIE_DESCRIPTIONS)
 
 
+def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
+    """Use the LLM + recent chat history to expand a vague photo request into a
+    detailed scene/pose/outfit description for ComfyUI.  Returns the raw expanded
+    description string (no character prefix/suffix — those are added by
+    build_heather_prompt).  Falls back to user_request unchanged on any error."""
+    try:
+        persona_name = personality.name
+
+        # Gather recent conversation turns for context (last 10 messages)
+        if chat_id not in conversations:
+            load_conversation(chat_id)
+        history = list(conversations.get(chat_id, []))[-10:]
+
+        history_text = ""
+        for msg in history:
+            role = "User" if msg["role"] == "user" else persona_name
+            history_text += f"{role}: {msg['content']}\n"
+
+        system_prompt = (
+            f"You are a concise image-prompt writer for a Stable Diffusion / FLUX image generator.\n"
+            f"You will be given a snippet of a chat conversation and a photo request. "
+            f"Your job is to write a SHORT, vivid scene description (30-60 words) that captures:\n"
+            f"- The setting or location implied by the conversation\n"
+            f"- The outfit or state of dress that fits the context\n"
+            f"- The pose or activity requested\n"
+            f"- Any specific details the user mentioned (uniform, lingerie, location, etc.)\n\n"
+            f"Output ONLY the description — no intro, no explanation, no quotes, no name. "
+            f"Write it as a prompt fragment, e.g.: 'wearing a red bikini, sitting on a beach towel, leaning back on hands, smiling at camera'\n"
+            f"If the request is explicit/sexual, describe the explicit scene accurately.\n"
+            f"Do NOT include the character's name or physical appearance — just scene, outfit, pose."
+        )
+
+        user_content = ""
+        if history_text.strip():
+            user_content += f"Recent conversation:\n{history_text.strip()}\n\n"
+        user_content += f"Photo request: {user_request}"
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 120,
+                "stream": False,
+            },
+            timeout=20,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            expanded = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if expanded:
+                main_logger.info(f"[COMFYUI] Context-expanded description: {expanded}")
+                return expanded
+    except Exception as e:
+        main_logger.warning(f"[COMFYUI] Context expansion failed, using raw request: {e}")
+
+    return user_request
+
 def build_heather_prompt(user_description: str) -> str:
     user_description = user_description.strip().lower()
     persona_name = personality.name.lower()
@@ -7612,6 +7675,13 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             clean_desc = random.choice(NSFW_SELFIE_DESCRIPTIONS)
         else:
             clean_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
+
+    # Expand the user's request using chat context and the LLM before sending to ComfyUI
+    loop = asyncio.get_running_loop()
+    clean_desc = await loop.run_in_executor(
+        None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
+    )
+
     description = clean_desc
 
     main_logger.info(f"Generating image for {chat_id}: {description[:50]}")
