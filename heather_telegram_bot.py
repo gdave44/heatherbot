@@ -265,23 +265,81 @@ log_startup_urls()
 
 class PersonalityLoader:
     """Loads and manages character personality from YAML configuration."""
-    
+
+    # Path to the example/template file used for auto-create and normalization
+    EXAMPLE_FILE = Path(__file__).parent / "persona_example.yaml"
+
     def __init__(self, yaml_path: str):
         potential_config_path = os.path.join(CONFIG_DIR, yaml_path)
-        if not os.path.isabs(yaml_path) and os.path.exists(potential_config_path):
+        if not os.path.isabs(yaml_path) and not os.path.exists(yaml_path):
             self.yaml_path = Path(potential_config_path)
         else:
             self.yaml_path = Path(yaml_path)
-            
+
         self.personality: Dict[str, Any] = {}
+        self._auto_create_if_missing()
         self.load()
-    
+
+    def _auto_create_if_missing(self):
+        """If the requested persona file doesn't exist, create it from the example."""
+        if self.yaml_path.exists():
+            return
+        if not self.EXAMPLE_FILE.exists():
+            main_logger.warning(f"Persona file not found and example missing: {self.yaml_path}")
+            return
+        try:
+            self.yaml_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(self.EXAMPLE_FILE, self.yaml_path)
+            main_logger.info(f"[PERSONA] Created {self.yaml_path} from example template")
+        except Exception as e:
+            main_logger.error(f"[PERSONA] Could not create {self.yaml_path}: {e}")
+
+    @staticmethod
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """Recursively merge override into base, keeping existing override values."""
+        result = dict(base)
+        for key, val in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+                result[key] = PersonalityLoader._deep_merge(result[key], val)
+            else:
+                result[key] = val
+        return result
+
+    def _normalize(self):
+        """Fill any missing keys by merging defaults from the example file."""
+        if not self.EXAMPLE_FILE.exists():
+            return
+        try:
+            with open(self.EXAMPLE_FILE, 'r', encoding='utf-8') as f:
+                defaults = yaml.safe_load(f) or {}
+            before_keys = self._count_keys(self.personality)
+            # Merge: defaults as base, loaded persona as override so nothing is overwritten
+            self.personality = self._deep_merge(defaults, self.personality)
+            after_keys = self._count_keys(self.personality)
+            added = after_keys - before_keys
+            if added:
+                main_logger.info(f"[PERSONA] Normalised — added {added} missing key(s) from template")
+            else:
+                main_logger.info("[PERSONA] Normalised — all expected keys present")
+        except Exception as e:
+            main_logger.warning(f"[PERSONA] Normalisation failed: {e}")
+
+    @staticmethod
+    def _count_keys(d: dict, _count: int = 0) -> int:
+        for v in d.values():
+            _count += 1
+            if isinstance(v, dict):
+                _count = PersonalityLoader._count_keys(v, _count)
+        return _count
+
     def load(self) -> bool:
-        """Load personality from YAML file."""
+        """Load personality from YAML file then normalise against the template."""
         try:
             with open(self.yaml_path, 'r', encoding='utf-8') as f:
-                self.personality = yaml.safe_load(f)
+                self.personality = yaml.safe_load(f) or {}
             main_logger.info(f"✓ Loaded personality from {self.yaml_path}")
+            self._normalize()
             return True
         except FileNotFoundError:
             main_logger.warning(f"Personality file not found: {self.yaml_path}, using defaults")
@@ -291,7 +349,7 @@ class PersonalityLoader:
             main_logger.error(f"Error loading personality: {e}, using defaults")
             self._load_defaults()
             return False
-    
+
     def _load_defaults(self):
         """Load hardcoded defaults if YAML fails"""
         self.personality = {
@@ -310,7 +368,7 @@ class PersonalityLoader:
                 ]
             }
         }
-    
+
     def reload(self) -> bool:
         """Hot-reload the personality file"""
         return self.load()
