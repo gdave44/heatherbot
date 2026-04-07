@@ -6278,23 +6278,27 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
             history_text += f"{role}: {msg['content']}\n"
 
         system_prompt = (
-            f"You are a concise image-prompt writer for a Stable Diffusion / FLUX image generator.\n"
-            f"You will be given a snippet of a chat conversation and a photo request. "
-            f"Your job is to write a SHORT, vivid scene description (30-60 words) that captures:\n"
-            f"- The setting or location implied by the conversation\n"
-            f"- The outfit or state of dress that fits the context\n"
-            f"- The pose or activity requested\n"
-            f"- Any specific details the user mentioned (uniform, lingerie, location, etc.)\n\n"
-            f"Output ONLY the description — no intro, no explanation, no quotes, no name. "
-            f"Write it as a prompt fragment, e.g.: 'wearing a red bikini, sitting on a beach towel, leaning back on hands, smiling at camera'\n"
-            f"If the request is explicit/sexual, describe the explicit scene accurately.\n"
-            f"Do NOT include the character's name or physical appearance — just scene, outfit, pose."
+            "You are a prompt writer for a FLUX image generator. "
+            "You will receive a photo request and optional conversation history.\n\n"
+            "RULES — follow in strict priority order:\n"
+            "1. The photo request is AUTHORITATIVE. Every detail the user explicitly states "
+            "(outfit, location, pose, nudity level) MUST appear in your output exactly as stated. "
+            "NEVER replace or override anything the user specified.\n"
+            "2. Use conversation history ONLY to fill in details the request leaves vague "
+            "(e.g. if no location is mentioned, infer one from context; "
+            "if an outfit is already specified, ignore any clothing mentioned in history).\n"
+            "3. Output a SHORT comma-separated prompt fragment — 10-20 words max. "
+            "No prose, no sentences, no explanation. "
+            "Format: '<outfit/nudity>, <setting>, <pose/activity>, <expression>'\n"
+            "4. Do NOT include the character's name or physical appearance.\n\n"
+            "Good output example: 'wearing a white spa uniform, massage room, standing facing camera, warm smile'\n"
+            "Bad output example: 'The user is standing nude in a bedroom holding a phone.' (prose, overrides outfit)"
         )
 
         user_content = ""
         if history_text.strip():
-            user_content += f"Recent conversation:\n{history_text.strip()}\n\n"
-        user_content += f"Photo request: {user_request}"
+            user_content += f"Conversation history (context only — do NOT override the request):\n{history_text.strip()}\n\n"
+        user_content += f"Photo request (authoritative): {user_request}"
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
