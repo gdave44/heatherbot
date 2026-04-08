@@ -3872,11 +3872,15 @@ def extract_image_description(message: str) -> str:
             pos = message_lower.find(pattern)
             description = original[pos + len(pattern):].strip()
             if description and len(description) > 2:
-                # Check if the extracted description or original message has NSFW intent
-                # "send me a pic of you being naughty" → "being naughty" is too vague for ComfyUI
-                # so we override with an explicit NSFW description
-                if _is_nsfw_context(message_lower) or _is_nsfw_context(description):
-                    # Use pose-specific NSFW description if a pose keyword is present
+                is_nsfw = _is_nsfw_context(message_lower) or _is_nsfw_context(description)
+                if is_nsfw:
+                    # Only replace with a generic NSFW description when the extracted part
+                    # is too vague to give ComfyUI useful scene information (e.g. "being
+                    # naughty", "naked", "nude").  If the user provided real scene detail
+                    # (location, pose, props — typically 30+ characters) trust their words
+                    # exactly; the context expansion LLM and LoRA pipeline handle the rest.
+                    if len(description) >= 30:
+                        return description   # user gave full scene — use it verbatim
                     pose_id = detect_pose(message_lower)
                     if pose_id:
                         return _get_pose_nsfw_description(pose_id)
