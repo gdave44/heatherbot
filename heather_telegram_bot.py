@@ -985,6 +985,8 @@ TIP_MENTION_COOLDOWN = 5 * 86400     # Don't mention tipping to same user more t
 TIP_MIN_MESSAGES = 12                # 12+ session messages before tip mention eligible
 PAYMENT_BOT_TOKEN = os.getenv("PAYMENT_BOT_TOKEN", "")
 PAYMENT_BOT_USERNAME = os.getenv("PAYMENT_BOT_USERNAME", "YourPaymentBot")  # @username for tip messages
+# Set TIPS_ENABLED=0 to suppress all tip nudges/hooks until the payment system is configured
+TIPS_ENABLED = os.getenv("TIPS_ENABLED", "1").strip() not in ("0", "false", "no", "off")
 
 # Warmth tier thresholds
 WARMTH_INITIAL = 0.7
@@ -2390,6 +2392,9 @@ async def maybe_send_tip_hook(bot: Bot, chat_id: int) -> bool:
     """Check if tip hook should fire — sends a simple, transparent one-liner.
     No Emma photos, no emotional leverage. Once per session, after 15+ messages.
     Returns True if hook was sent."""
+    if not TIPS_ENABLED:
+        return False
+
     dyn = get_conversation_dynamics(chat_id)
     mc = dyn['msg_count']
 
@@ -7821,6 +7826,71 @@ async def handle_testtip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await context.bot.send_message(chat_id, "Failed to send invoice — check logs")
 
+async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin cheat: simulate a tip to test character warmth changes.
+
+    Usage:
+      /hubaloo tip 50      — simulate a 50-star tip to your own chat
+      /hubaloo tip 50 789  — simulate a 50-star tip to chat_id 789
+      /hubaloo tip         — defaults to 50 stars
+
+    The command calls the same path as a real payment: record_tip_received()
+    boosts warmth, clears decline state, and the bot sends the thank-you reply
+    injected into conversation context — exactly as if a real tip arrived.
+    """
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
+        return
+
+    args = context.args or []
+    # Strip "tip" keyword if present
+    stripped = [a for a in args if a.lower() != "tip"]
+
+    stars = 50
+    target_chat_id = chat_id
+
+    if len(stripped) >= 2:
+        try:
+            stars = int(stripped[0])
+            target_chat_id = int(stripped[1])
+        except ValueError:
+            await context.bot.send_message(chat_id, "Usage: /hubaloo tip <stars> [chat_id]")
+            return
+    elif len(stripped) == 1:
+        try:
+            stars = int(stripped[0])
+        except ValueError:
+            await context.bot.send_message(chat_id, "Usage: /hubaloo tip <stars> [chat_id]")
+            return
+
+    record_tip_received(target_chat_id, stars, tipper_name="[cheat]")
+    ts = get_tipper_status(target_chat_id)
+
+    thank_msg = get_tip_thank_response(stars)
+    try:
+        await context.bot.send_message(target_chat_id, thank_msg)
+    except Exception:
+        pass  # target may be the admin chat itself — send there too below
+
+    # Inject into conversation context so LLM knows the tip happened
+    if target_chat_id in conversations:
+        conversations[target_chat_id].append({
+            "role": "assistant",
+            "content": f"*received a tip of {stars} stars* {thank_msg}",
+        })
+
+    tier = ts.get('tier', 0)
+    warmth = ts.get('warmth', 0)
+    tier_label = get_warmth_tier(target_chat_id)
+    await context.bot.send_message(
+        chat_id,
+        f"✅ Simulated {stars}-star tip for chat {target_chat_id}\n"
+        f"   Tier: {tier} | Warmth: {warmth:.2f} ({tier_label})\n"
+        f"   Total stars: {ts.get('total_stars', 0)}"
+    )
+    main_logger.info(f"[CHEAT] /hubaloo: simulated {stars}-star tip for {target_chat_id}")
+
+
 async def handle_admin_warmth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show warmth tiers for all tracked users."""
     chat_id = update.effective_chat.id
@@ -10062,6 +10132,7 @@ async def main():
     application.add_handler(CommandHandler("admin_reengage_send", handle_admin_reengage_send))
     application.add_handler(CommandHandler("admin_reengage_history", handle_admin_reengage_history))
     application.add_handler(CommandHandler("testtip", handle_testtip))
+    application.add_handler(CommandHandler("hubaloo", handle_hubaloo))
     application.add_handler(CommandHandler("admin_warmth", handle_admin_warmth))
     application.add_handler(CommandHandler("admin_opportunities", handle_admin_opportunities))
     application.add_handler(CommandHandler("admin_help", handle_admin_help))
