@@ -7863,7 +7863,12 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     injected into conversation context — exactly as if a real tip arrived.
     """
     chat_id = update.effective_chat.id
-    if not is_admin(chat_id):
+    user_id = update.effective_user.id if update.effective_user else chat_id
+    main_logger.info(f"[CHEAT] /hubaloo called by user_id={user_id} chat_id={chat_id} | ADMIN_USER_ID={ADMIN_USER_ID}")
+
+    if not is_admin(user_id):
+        main_logger.warning(f"[CHEAT] /hubaloo rejected — user {user_id} is not admin (ADMIN_USER_ID={ADMIN_USER_ID})")
+        await context.bot.send_message(chat_id, "⛔ Admin only. Set ADMIN_USER_ID in .env to your Telegram user ID.")
         return
 
     args = context.args or []
@@ -7893,8 +7898,8 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     thank_msg = get_tip_thank_response(stars)
     try:
         await context.bot.send_message(target_chat_id, thank_msg)
-    except Exception:
-        pass  # target may be the admin chat itself — send there too below
+    except Exception as e:
+        main_logger.warning(f"[CHEAT] /hubaloo: could not send thank-you to {target_chat_id}: {e}")
 
     # Inject into conversation context so LLM knows the tip happened
     if target_chat_id in conversations:
