@@ -8125,6 +8125,32 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
     )
 
+    # The expansion LLM is told not to infer nudity/clothing from history, which also
+    # suppresses sex-toy props.  Compensate by scanning recent conversation directly:
+    # if the chat has been discussing a dildo/vibrator and the expanded prompt doesn't
+    # already mention one, append it so the dildo LoRA keyword check fires.
+    if original_is_nsfw:
+        toy_keywords_in_prompt = ["dildo", "vibrator", "sex toy", "butt plug",
+                                   "using a toy", "strap-on", "strapon"]
+        if not any(kw in clean_desc.lower() for kw in toy_keywords_in_prompt):
+            recent_msgs = list(conversations.get(chat_id, []))[-10:]
+            recent_text = " ".join(m.get("content", "") for m in recent_msgs).lower()
+            toy_terms = {
+                "dildo":    ["dildo", "dildos"],
+                "vibrator": ["vibrator", "vibrating", "vibe"],
+                "sex toy":  ["sex toy", "sex toys"],
+                "butt plug":["butt plug", "anal plug"],
+                "strap-on": ["strap-on", "strapon", "strap on"],
+            }
+            matched_prop = None
+            for prop, variants in toy_terms.items():
+                if any(v in recent_text for v in variants):
+                    matched_prop = prop
+                    break
+            if matched_prop:
+                clean_desc = f"{clean_desc}, using a {matched_prop}"
+                main_logger.info(f"[COMFYUI] Appended toy prop from conversation context: '{matched_prop}'")
+
     description = clean_desc
 
     main_logger.info(f"Generating image for {chat_id}: {description[:50]}")
