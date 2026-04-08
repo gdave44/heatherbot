@@ -6748,6 +6748,30 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
             else:
                 main_logger.info("NSFW image — NSFW Master LoRA only")
 
+            # Dildo/sex toy LoRA — inject when prompt references toys/insertables
+            dildo_lora = "flux1-dildo1.safetensors"
+            dildo_keywords = [
+                "dildo", "vibrator", "sex toy", "butt plug",
+                "using a toy", "with a toy", "her toy", "the toy",
+                "insertable", "strap-on", "strapon",
+            ]
+            needs_dildo_lora = any(kw in user_description.lower() for kw in dildo_keywords)
+            if needs_dildo_lora and _lora_available(dildo_lora):
+                workflow["22"] = {
+                    "inputs": {
+                        "lora_name": dildo_lora,
+                        "strength_model": 0.75,
+                        "strength_clip": 0.75,
+                        "model": [last_model_node, 0],
+                        "clip": [last_clip_node, 1],
+                    },
+                    "class_type": "LoraLoader",
+                    "_meta": {"title": "Dildo/Toy Detail"}
+                }
+                last_model_node = "22"
+                last_clip_node = "22"
+                main_logger.info("NSFW image — dildo/toy LoRA injected")
+
             workflow["7"]["inputs"]["model"] = [last_model_node, 0]
             workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
             workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
