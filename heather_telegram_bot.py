@@ -3079,26 +3079,23 @@ IMAGE_REQUEST_TRIGGERS = [
 # Phrases in Heather's AI response that signal she wants to send a photo
 # If detected AND ComfyUI is available, we actually follow through
 RESPONSE_PHOTO_TRIGGERS = [
-    "let me show you", "wanna see", "want to see", "i'll send you",
-    "sending you a pic", "here's a pic", "check this out",
-    "take a look", "selfie for you", "pic for you",
-    "let me take a selfie", "hold on let me show",
-    "i'll show you", "lemme show you", "want a pic",
-    # Variations that came up in real LLM responses
-    "i'd show you", "id show you", "show you everything",
-    "show you what", "show you how", "if you were here",
-    "wish i could show", "wish i could send",
+    # Explicit "I am sending you a photo right now" phrases only.
+    # Broad/ambient phrases ("here you go", "check this out", "take a look",
+    # "show you how", "if you were here") were causing false positives where
+    # the LLM used them in normal conversation and the bot tried to send a
+    # photo that was never requested.
+    "i'll send you a pic", "i'll send you a photo", "i'll send you a selfie",
+    "sending you a pic", "sending you a photo", "sending you a selfie",
+    "here's a pic", "here's a photo", "here's a selfie",
+    "selfie for you", "pic for you", "photo for you",
+    "let me take a selfie", "let me grab my phone",
+    "taking a pic", "taking a photo", "taking a selfie",
+    "getting my camera",
     # Past-tense claims (LLM says it already sent)
     "just sent", "sent you a pic", "sent that pic", "sent you a photo",
     "sending a pic", "sending a photo", "sending now",
-    "here you go", "hope you like what you see",
     # Bare tag shorthand (LLM tries to embed a photo inline)
     "[pic]", "[photo]", "[selfie]", "[img]",
-    # Broader LLM response variations (catches "sending you a treat", etc.)
-    "sending you a", "send you a little", "little treat",
-    "hold on let me", "let me grab my phone",
-    "taking a pic", "taking a photo", "taking a selfie",
-    "getting my camera", "getting my phone",
 ]
 
 # Proactive selfie settings
@@ -4076,7 +4073,10 @@ def should_send_context_photo(chat_id: int, user_message: str) -> Optional[str]:
     if time.time() - _context_photo_last_sent.get(chat_id, 0) < CONTEXT_PHOTO_COOLDOWN:
         return None
 
-    return _detect_context_photo_topic(user_message)
+    topic = _detect_context_photo_topic(user_message)
+    if topic is None:
+        main_logger.debug(f"[CONTEXT_PHOTO] Threshold reached for {chat_id} — no keyword matched in: {user_message[:60]!r}")
+    return topic
 
 def _reset_context_photo_trigger(chat_id: int):
     """Reset the threshold for the next context photo after one fires."""
@@ -9006,20 +9006,21 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     photo_desc = extract_photo_context_from_response(response)
                     main_logger.info(f"[{request_id}] Response-triggered photo for {chat_id}: {photo_desc[:40]}")
 
-                # Layer 2: Context-triggered photo — user mentioned vehicle/location/activity
+                # Layer 2 & 3: Only for non-COLD tiers
                 elif get_warmth_tier(chat_id) != "COLD":
+                    # Layer 2: Context-triggered photo — user mentioned vehicle/location/activity
                     ctx_topic = should_send_context_photo(chat_id, user_message)
                     if ctx_topic:
                         send_photo = True
                         photo_desc = _build_context_photo_desc(chat_id, user_message, ctx_topic)
                         _reset_context_photo_trigger(chat_id)
                         main_logger.info(f"[{request_id}] Context photo ({ctx_topic}) for {chat_id}: {photo_desc[:50]}")
-
-                # Layer 3: Random proactive selfie after enough flirty exchanges (skip COLD)
-                elif get_warmth_tier(chat_id) != "COLD" and should_send_proactive_photo(chat_id):
-                    send_photo = True
-                    photo_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
-                    main_logger.info(f"[{request_id}] Proactive selfie for {chat_id}: {photo_desc[:40]}")
+                    else:
+                        # Layer 3: Random proactive selfie after enough flirty exchanges
+                        if should_send_proactive_photo(chat_id):
+                            send_photo = True
+                            photo_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
+                            main_logger.info(f"[{request_id}] Proactive selfie for {chat_id}: {photo_desc[:40]}")
 
                 if send_photo and photo_desc:
                     post_addon_sent = True
