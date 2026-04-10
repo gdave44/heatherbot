@@ -6738,6 +6738,16 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         if img_context:   setting_lines.append(f"Preferred settings: {img_context}")
         setting_block = "\n".join(setting_lines)
 
+        # Work setting name — first hangout tagged as workplace, or inferred from occupation
+        work_setting = next(
+            (s.get('name') for s in hangouts if s.get('use', '').lower().startswith('where she work')),
+            None
+        )
+        if not work_setting and hangouts:
+            work_setting = hangouts[0].get('name', '')
+        if not work_setting and occupation:
+            work_setting = "her workplace"
+
         # ── Recent conversation (last 8 turns, truncated) ──
         if chat_id not in conversations:
             load_conversation(chat_id)
@@ -6764,6 +6774,10 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "EXAMPLE — do it exactly like this:\n"
             "NSFW\n"
             "33-year-old woman, long brunette hair, brown eyes, massage table, close-up of therapist fingering female client's pussy, ...\n\n"
+            "SETTING INFERENCE RULES (apply when the scene doesn't state a location):\n"
+            f"- If the scene mentions a customer, client, or patient → set the scene at {work_setting}\n"
+            "- If the scene only mentions a man, woman, guy, girl, or him/her with no role → setting can be any of her typical locations\n"
+            "- If the scene explicitly states a location → always use that location\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
             "- Weave the character's physical description naturally into the scene\n"
