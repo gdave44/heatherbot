@@ -3872,22 +3872,17 @@ def extract_image_description(message: str) -> str:
             pos = message_lower.find(pattern)
             description = original[pos + len(pattern):].strip()
             if description and len(description) > 2:
-                is_nsfw = _is_nsfw_context(message_lower) or _is_nsfw_context(description)
-                if is_nsfw:
-                    # Only replace with a generic NSFW description when the extracted part
-                    # is too vague to give ComfyUI useful scene information (e.g. "being
-                    # naughty", "naked", "nude").  If the user provided real scene detail
-                    # (location, pose, props — typically 30+ characters) trust their words
-                    # exactly; the context expansion LLM and LoRA pipeline handle the rest.
-                    if len(description) >= 30:
-                        return description   # user gave full scene — use it verbatim
-                    pose_id = detect_pose(message_lower)
-                    if pose_id:
-                        return _get_pose_nsfw_description(pose_id)
-                    return random.choice(NSFW_SELFIE_DESCRIPTIONS)
+                # The user told us exactly what they want ("naked, sitting in your Jeep",
+                # "wearing your massage uniform", "legs up in the air, dildo deep in your
+                # pussy", etc.).  Always use it as the anchor — even if it's short or NSFW.
+                # The LLM context expansion pipeline adds setting/pose for vague anchors,
+                # and the NSFW LoRA pipeline handles explicit content regardless.
+                # Generic fallback descriptions are only for bare requests with no "of you"
+                # pattern (e.g. "send nudes", "show me your tits") handled below.
                 return description
 
-    # Handle direct NSFW requests like "send nudes", "show me your tits", etc.
+    # Handle bare NSFW/photo requests with no scene description
+    # ("send nudes", "show me your tits", "send a pic" with nothing after it, etc.)
     if _is_nsfw_context(message_lower):
         pose_id = detect_pose(message_lower)
         if pose_id:
