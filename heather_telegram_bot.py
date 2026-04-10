@@ -6825,6 +6825,45 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 last_clip_node = "22"
                 main_logger.info("NSFW image — dildo/toy LoRA injected")
 
+            # Handjob/erotic massage LoRA — inject when conversation involves
+            # erotic massage, happy ending, or manual stimulation
+            handjob_lora = "Hand_job_POV.safetensors"
+            handjob_keywords = [
+                "erotic massage", "sensual massage", "happy ending",
+                "hand job", "handjob", "stroking his", "stroking the",
+                "jerking", "jerk him", "jerk me",
+                # marker appended by generate_and_send_image_async from conversation scan
+                "__handjob_lora__",
+            ]
+            needs_handjob_lora = any(kw in user_description.lower() for kw in handjob_keywords)
+            if needs_handjob_lora and _lora_available(handjob_lora):
+                workflow["23"] = {
+                    "inputs": {
+                        "lora_name": handjob_lora,
+                        "strength_model": 0.8,
+                        "strength_clip": 0.8,
+                        "model": [last_model_node, 0],
+                        "clip": [last_clip_node, 1],
+                    },
+                    "class_type": "LoraLoader",
+                    "_meta": {"title": "Handjob/Erotic Massage"}
+                }
+                last_model_node = "23"
+                last_clip_node = "23"
+                # Determine which trigger phrase best fits the scene
+                desc_lower = user_description.lower()
+                if any(w in desc_lower for w in ["cum", "facial", "finish", "fluid", "come on"]):
+                    trigger = "white viscous fluid on her face"
+                elif any(w in desc_lower for w in ["oral", "tongue", "lick", "suck", "mouth"]):
+                    trigger = "tongue extended"
+                else:
+                    trigger = "Explicit photograph of a woman holding a man's erect penis"
+                # Prepend trigger to full_prompt so the LoRA activates
+                full_prompt = f"{trigger}, {full_prompt}"
+                if POSITIVE_PROMPT_NODE in workflow:
+                    workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+                main_logger.info(f"NSFW image — handjob LoRA injected | trigger: {trigger}")
+
             workflow["7"]["inputs"]["model"] = [last_model_node, 0]
             workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
             workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
@@ -8195,6 +8234,21 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                     prebuilt_prompt = f"{prebuilt_prompt}, using a {prop}"
                     main_logger.info(f"[COMFYUI] Fallback toy prop appended to LLM prompt: '{prop}'")
                     break
+
+    # Erotic massage / happy ending LoRA: scan conversation history for trigger context.
+    # If found and not already in clean_desc, inject a marker so generate_heather_image
+    # picks it up for LoRA injection regardless of what the LLM wrote in prebuilt_prompt.
+    if original_is_nsfw:
+        handjob_conv_triggers = [
+            "erotic massage", "sensual massage", "happy ending",
+            "hand job", "handjob", "jerk", "stroking",
+        ]
+        if not any(kw in clean_desc.lower() for kw in handjob_conv_triggers):
+            recent_msgs_hj = list(conversations.get(chat_id, []))[-15:]
+            recent_text_hj = " ".join(m.get("content", "") for m in recent_msgs_hj).lower()
+            if any(kw in recent_text_hj for kw in handjob_conv_triggers):
+                clean_desc = f"{clean_desc} __handjob_lora__"
+                main_logger.info("[COMFYUI] Handjob LoRA marker injected from conversation context")
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
