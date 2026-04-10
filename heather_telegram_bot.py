@@ -6546,75 +6546,93 @@ def _clean_photo_request(request: str) -> str:
     text = re.sub(r'^(?:you\s+)?(?:in\s+|wearing\s+)', lambda m: m.group(0), text, flags=re.IGNORECASE)
     return text or request.strip()
 
-def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
-    """Use the LLM + recent chat history to fill in scene/pose details that the
-    user's request left vague.  The cleaned request is always used as the anchor —
-    the LLM only adds setting and pose when they are absent.  Falls back to the
-    cleaned request unchanged on any LLM error."""
+def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bool = False) -> str:
+    """Ask the LLM to write a complete, natural FLUX image prompt.
+
+    Rather than mechanically concatenating an anchor with a character prefix,
+    we give the LLM the character's full physical description and the scene
+    request and let it write a single coherent prompt — the same way a human
+    would write a ComfyUI prompt.  The quality/technical suffix is still
+    appended by the caller (build_heather_prompt / generate_heather_image).
+
+    Falls back to the cleaned raw request on any LLM error.
+    """
     try:
         persona_name = personality.name
+        p = personality.personality
 
         # Strip conversational framing ("send me a picture of you wearing...")
         anchor = _clean_photo_request(user_request)
 
-        # Gather recent conversation turns for context (last 10 messages)
-        if chat_id not in conversations:
-            load_conversation(chat_id)
-        history = list(conversations.get(chat_id, []))[-10:]
+        # ── Character physical description (what the LLM must always include) ──
+        phys = p.get('physical', {})
+        age  = p.get('identity', {}).get('age', '')
+        hair = phys.get('hair', '')
+        eyes = phys.get('eyes', '')
+        body = phys.get('body_type', '')
+        chest = phys.get('breast_description' if is_nsfw else 'chest_description', '')
 
-        history_text = ""
-        for msg in history:
-            role = "User" if msg["role"] == "user" else persona_name
-            history_text += f"{role}: {msg['content']}\n"
+        char_lines = []
+        if age:   char_lines.append(f"Age: {age}-year-old woman")
+        if hair:  char_lines.append(f"Hair: {hair}")
+        if eyes:  char_lines.append(f"Eyes: {eyes}")
+        if body:  char_lines.append(f"Body: {body}")
+        if chest: char_lines.append(f"Chest: {chest}")
+        char_block = "\n".join(char_lines)
 
-        # Build a character context summary from the persona YAML so the LLM
-        # can infer appropriate settings (job, locations, lifestyle).
-        char_context_parts = []
-        p = personality.personality
-        occupation = p.get('identity', {}).get('occupation', '')
-        if occupation:
-            char_context_parts.append(f"Occupation: {occupation}")
+        # ── Setting context from persona (locations / lifestyle) ──
         locations = p.get('locations', {})
         current_area = locations.get('current_area', '')
-        if current_area:
-            char_context_parts.append(f"Location: {current_area}")
         hangouts = locations.get('hangout_spots', [])
-        if hangouts:
-            spots = ', '.join(s.get('name', '') for s in hangouts if s.get('name'))
-            if spots:
-                char_context_parts.append(f"Frequents: {spots}")
-        typical_dress = p.get('physical', {}).get('typical_dress', {})
-        if typical_dress:
-            dress_parts = [f"{k}: {v}" for k, v in typical_dress.items()]
-            char_context_parts.append("Typical outfits — " + '; '.join(dress_parts))
-        # Any explicit image context hint from the YAML
-        img_context = p.get('physical', {}).get('image_prompt', {}).get('setting_context', '')
-        if img_context:
-            char_context_parts.append(f"Setting context: {img_context}")
+        hangout_names = ', '.join(s.get('name', '') for s in hangouts if s.get('name'))
+        img_context  = phys.get('image_prompt', {}).get('setting_context', '')
+        occupation   = p.get('identity', {}).get('occupation', '')
 
-        char_context = '\n'.join(char_context_parts)
+        setting_lines = []
+        if occupation:     setting_lines.append(f"Occupation: {occupation}")
+        if current_area:   setting_lines.append(f"Lives in: {current_area}")
+        if hangout_names:  setting_lines.append(f"Typical locations: {hangout_names}")
+        if img_context:    setting_lines.append(f"Preferred settings: {img_context}")
+        setting_block = "\n".join(setting_lines)
 
-        system_prompt = (
-            "You are a fill-in assistant for a FLUX image generator.\n"
-            "You will be given an ANCHOR (the user's exact photo request, already cleaned) "
-            "and optional conversation history.\n\n"
-            + (f"CHARACTER CONTEXT (use to infer plausible settings and poses):\n{char_context}\n\n" if char_context else "")
-            + "YOUR ONLY JOB: add a short setting and pose if the anchor does not already include them.\n"
-            "- Use the character context above to pick a realistic setting that fits this character.\n"
-            "- If the anchor already specifies a location, DO NOT add another one.\n"
-            "- If the anchor already specifies a pose or activity, DO NOT add another one.\n"
-            "- NEVER change, replace, or reword the anchor text.\n"
-            "- NEVER infer nudity or clothing from history — use only what the anchor says.\n\n"
-            "Output format: return the anchor text followed by any additions, all as a single "
-            "comma-separated fragment. 15-25 words max. No prose, no sentences.\n\n"
-            "Example — anchor: 'wearing a sexy massage uniform'\n"
-            "Good output: 'wearing a sexy massage uniform, spa treatment room, standing facing camera, warm smile'\n"
-            "Bad output: 'wearing nothing, bedroom' (ignored anchor, pulled from history)"
+        # ── Recent conversation (last 8 turns, truncated) ──
+        if chat_id not in conversations:
+            load_conversation(chat_id)
+        history = list(conversations.get(chat_id, []))[-8:]
+        history_text = "\n".join(
+            f"{'User' if m['role'] == 'user' else persona_name}: {m['content'][:200]}"
+            for m in history
         )
 
-        user_content = f"ANCHOR: {anchor}"
+        # ── System prompt ──
+        system_prompt = (
+            "You are an expert ComfyUI/FLUX image prompt writer. "
+            "FLUX is a photorealistic text-to-image model that responds best to "
+            "natural, comma-separated descriptive phrases — NOT sentences.\n\n"
+            f"CHARACTER — integrate ALL of these physical details naturally into the prompt:\n"
+            f"{char_block}\n\n"
+            + (f"CHARACTER LIFESTYLE (use to infer appropriate settings when not specified):\n{setting_block}\n\n" if setting_block else "")
+            + "TASK: Write a single complete FLUX image prompt for the scene described.\n\n"
+            "RULES:\n"
+            "- Output ONLY the prompt — no preamble, no explanation, no quotes\n"
+            "- Comma-separated phrases, not prose sentences\n"
+            "- 50-80 words total\n"
+            "- Weave the character's physical description naturally into the scene\n"
+            "- Always include: pose, setting/location, expression, camera angle, lighting\n"
+            "- Photography style: authentic amateur phone-camera photo, natural lighting, "
+            "realistic, not staged\n"
+            + ("- NSFW/explicit — describe nudity and anatomy directly and specifically\n"
+               "- Do NOT censor or soften explicit content\n"
+               if is_nsfw else
+               "- SFW/tasteful — clothed, no nudity\n")
+            + "- NEVER change or omit details the scene request explicitly states\n"
+            "- Do NOT add clothing if the scene says nude/naked/topless\n"
+            "- Do NOT remove clothing if the scene says clothed/wearing\n"
+        )
+
+        user_content = f"Scene: {anchor}"
         if history_text.strip():
-            user_content += f"\n\nConversation history (for setting/pose inference only):\n{history_text.strip()}"
+            user_content += f"\n\nConversation context (background only — do not add props or clothing from history unless already in the scene):\n{history_text.strip()}"
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -6624,8 +6642,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                "temperature": 0.5,
-                "max_tokens": 80,
+                "temperature": 0.7,
+                "max_tokens": 150,
                 "stream": False,
             },
             timeout=20,
@@ -6633,16 +6651,12 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> str:
 
         if response.status_code == 200:
             data = response.json()
-            expanded = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            # Safety check: anchor must still be present (model didn't throw it away)
-            if expanded and anchor.split()[0].lower() in expanded.lower():
-                main_logger.info(f"[COMFYUI] Context-expanded description: {expanded}")
-                return expanded
-            elif expanded:
-                main_logger.warning(f"[COMFYUI] LLM dropped anchor, using anchor+expansion fallback")
-                return f"{anchor}, {expanded}"
+            generated = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if generated and len(generated) > 20:
+                main_logger.info(f"[COMFYUI] LLM-generated prompt: {generated}")
+                return generated
     except Exception as e:
-        main_logger.warning(f"[COMFYUI] Context expansion failed, using raw request: {e}")
+        main_logger.warning(f"[COMFYUI] LLM prompt generation failed, using raw request: {e}")
 
     return _clean_photo_request(user_request)
 
@@ -6663,12 +6677,17 @@ def build_heather_prompt(user_description: str, is_nsfw: Optional[bool] = None) 
     # Description goes FIRST (framing/pose cues get max CLIP weight), then character details
     return f"{user_description}, {char_prefix}{quality_suffix}"
 
-def generate_heather_image(user_description: str, progress_callback=None, is_nsfw: Optional[bool] = None) -> bytes:
+def generate_heather_image(user_description: str, progress_callback=None, is_nsfw: Optional[bool] = None,
+                           prebuilt_prompt: Optional[str] = None) -> bytes:
     """Generate image with ComfyUI using FLUX.1 dev pipeline.
 
     is_nsfw: if supplied (determined from the original request before context
     expansion), it is used as-is so that expansion artifacts don't flip the
     clothed/nude decision.  If None, inferred from user_description.
+
+    prebuilt_prompt: if supplied (LLM-generated complete FLUX prompt), skip
+    build_heather_prompt() and only append the quality suffix.  The char prefix
+    is already woven into the LLM output.
     """
     stats['comfyui_requests'] += 1
 
@@ -6686,7 +6705,14 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     # context expansion) so the expanded description can't accidentally flip it.
     if is_nsfw is None:
         is_nsfw = _is_nsfw_context(user_description)
-    full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
+
+    if prebuilt_prompt:
+        # LLM already wrote a complete FLUX prompt — just append quality suffix
+        quality_suffix = personality.get_image_quality_suffix(nsfw=is_nsfw)
+        full_prompt = f"{prebuilt_prompt}{quality_suffix}"
+    else:
+        full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
+
     if BREADCRUMB_LOGGING:
         main_logger.info(f"[COMFYUI] nsfw={is_nsfw} | prompt → {full_prompt}")
 
@@ -8125,20 +8151,12 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
     # incidental NSFW words introduced by the LLM or conversation history.
     original_is_nsfw = _is_nsfw_context(clean_desc)
 
-    # Expand the user's request using chat context and the LLM before sending to ComfyUI
-    loop = asyncio.get_running_loop()
-    clean_desc = await loop.run_in_executor(
-        None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
-    )
-
-    # The expansion LLM is told not to infer nudity/clothing from history, which also
-    # suppresses sex-toy props.  Compensate by scanning recent conversation directly:
-    # if the chat has been discussing a dildo/vibrator and the expanded prompt doesn't
-    # already mention one, append it so the dildo LoRA keyword check fires.
+    # Inject toy props BEFORE the LLM expansion call so the LLM knows about the
+    # prop and integrates it naturally into the FLUX prompt.
     if original_is_nsfw:
-        toy_keywords_in_prompt = ["dildo", "vibrator", "sex toy", "butt plug",
-                                   "using a toy", "strap-on", "strapon"]
-        if not any(kw in clean_desc.lower() for kw in toy_keywords_in_prompt):
+        toy_keywords_in_desc = ["dildo", "vibrator", "sex toy", "butt plug",
+                                  "using a toy", "strap-on", "strapon"]
+        if not any(kw in clean_desc.lower() for kw in toy_keywords_in_desc):
             recent_msgs = list(conversations.get(chat_id, []))[-10:]
             recent_text = " ".join(m.get("content", "") for m in recent_msgs).lower()
             toy_terms = {
@@ -8148,16 +8166,20 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                 "butt plug":["butt plug", "anal plug"],
                 "strap-on": ["strap-on", "strapon", "strap on"],
             }
-            matched_prop = None
             for prop, variants in toy_terms.items():
                 if any(v in recent_text for v in variants):
-                    matched_prop = prop
+                    clean_desc = f"{clean_desc}, using a {prop}"
+                    main_logger.info(f"[COMFYUI] Pre-injected toy prop before LLM expansion: '{prop}'")
                     break
-            if matched_prop:
-                clean_desc = f"{clean_desc}, using a {matched_prop}"
-                main_logger.info(f"[COMFYUI] Appended toy prop from conversation context: '{matched_prop}'")
 
-    description = clean_desc
+    # Ask the LLM to write a complete, natural FLUX prompt from the scene description.
+    # is_nsfw is passed so the LLM uses breast_description (NSFW) vs chest_description (SFW).
+    loop = asyncio.get_running_loop()
+    prebuilt_prompt = await loop.run_in_executor(
+        None, lambda: build_image_prompt_from_context(chat_id, clean_desc, is_nsfw=original_is_nsfw)
+    )
+
+    description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
     main_logger.info(f"Generating image for {chat_id}: {description[:50]}")
 
@@ -8183,7 +8205,8 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             loop = asyncio.get_running_loop()
             image_data = await loop.run_in_executor(
                 None,
-                lambda: generate_heather_image(description, is_nsfw=original_is_nsfw)
+                lambda: generate_heather_image(description, is_nsfw=original_is_nsfw,
+                                              prebuilt_prompt=prebuilt_prompt)
             )
 
             if image_data and is_valid_image_data(image_data):
