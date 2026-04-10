@@ -6949,7 +6949,7 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
 
             # Handjob/erotic massage LoRA — inject when conversation involves
             # erotic massage, happy ending, or manual stimulation
-            handjob_lora = "Hand_job_POV.safetensors"
+            handjob_lora = "Nsfw_Handjob.safetensors"
             handjob_keywords = [
                 "erotic massage", "sensual massage", "happy ending",
                 "hand job", "handjob", "stroking his", "stroking the",
