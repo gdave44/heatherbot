@@ -5559,6 +5559,166 @@ def check_tts_status() -> tuple[bool, str]:
 def check_heather_face() -> bool:
     return os.path.exists(HEATHER_FACE_IMAGE)
 
+def _build_face_reference_prompt() -> str:
+    """Ask the LLM to write a clean portrait prompt from the persona's physical description."""
+    try:
+        p = personality.personality
+        phys = p.get('physical', {})
+        age  = p.get('identity', {}).get('age', '')
+        hair = phys.get('hair', '')
+        eyes = phys.get('eyes', '')
+        body = phys.get('body_type', '')
+
+        char_block = ", ".join(filter(None, [
+            f"{age}-year-old woman" if age else "",
+            hair, eyes, body,
+        ]))
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert ComfyUI/FLUX portrait prompt writer. "
+                            "Write a clean, photorealistic portrait prompt for a face-swap reference image. "
+                            "The result must be: close-up headshot, face and shoulders only, "
+                            "neutral or slight smile expression, looking directly at camera, "
+                            "soft natural studio lighting, SFW, fully clothed. "
+                            "Output ONLY the prompt — comma-separated phrases, 30-50 words, no explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Character: {char_block}",
+                    },
+                ],
+                "temperature": 0.5,
+                "max_tokens": 100,
+                "stream": False,
+            },
+            timeout=15,
+        )
+        if response.status_code == 200:
+            prompt = response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if prompt and len(prompt) > 10:
+                return prompt
+    except Exception as e:
+        main_logger.warning(f"[FACE-GEN] LLM portrait prompt failed: {e}")
+
+    # Fallback: build from persona fields directly
+    p = personality.personality
+    phys = p.get('physical', {})
+    parts = []
+    age = p.get('identity', {}).get('age', '')
+    if age: parts.append(f"{age}-year-old woman")
+    if phys.get('hair'): parts.append(phys['hair'])
+    if phys.get('eyes'): parts.append(f"{phys['eyes']} eyes")
+    if phys.get('body_type'): parts.append(phys['body_type'])
+    parts += [
+        "close-up headshot portrait", "face and shoulders only",
+        "looking directly at camera", "slight natural smile",
+        "soft studio lighting", "photorealistic", "high quality",
+    ]
+    return ", ".join(parts)
+
+def generate_face_reference() -> bool:
+    """Generate a portrait via ComfyUI and save it as the face reference image.
+
+    Called at startup when heather_face.png is missing. Builds a minimal
+    workflow with no LoRAs and no face swap so the output is a clean,
+    unmodified portrait usable as a ReActor source face.
+
+    Returns True on success, False on any failure.
+    """
+    if not COMFYUI_WORKFLOW:
+        main_logger.warning("[FACE-GEN] Workflow not loaded — cannot generate face reference")
+        return False
+
+    is_online, _ = check_comfyui_status()
+    if not is_online:
+        main_logger.warning("[FACE-GEN] ComfyUI offline — cannot generate face reference")
+        return False
+
+    main_logger.info("[FACE-GEN] heather_face.png missing — generating portrait from persona...")
+
+    portrait_prompt = _build_face_reference_prompt()
+    quality_suffix = personality.get_image_quality_suffix(nsfw=False)
+    full_prompt = f"{portrait_prompt}{quality_suffix}"
+    main_logger.info(f"[FACE-GEN] Portrait prompt: {full_prompt}")
+
+    # Build a minimal workflow: base checkpoint → KSampler → save
+    # Copy the base workflow and strip face swap + LoRA nodes
+    workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
+
+    # Set the portrait prompt
+    if POSITIVE_PROMPT_NODE in workflow:
+        workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+
+    # Randomize seed
+    for nid in ["7", "14"]:
+        if nid in workflow and "seed" in workflow[nid].get("inputs", {}):
+            workflow[nid]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+
+    # Set FLUX guidance
+    if "5" in workflow:
+        workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+
+    # Remove face swap nodes — output directly from the raw generation
+    if "9" in workflow:
+        workflow["9"]["inputs"]["images"] = ["8", 0]
+    for nid in ["10", "11", "13", "14", "15", "20", "21", "22", "23", "24"]:
+        if nid in workflow:
+            del workflow[nid]
+
+    # Portrait framing: square crop
+    if "6" in workflow:
+        workflow["6"]["inputs"]["width"] = 768
+        workflow["6"]["inputs"]["height"] = 768
+
+    try:
+        prompt_id = queue_comfyui_prompt(workflow)
+        main_logger.info(f"[FACE-GEN] Submitted portrait job: {prompt_id}")
+
+        start = time.time()
+        while time.time() - start < 180:   # 3 min timeout
+            history = get_comfyui_history(prompt_id)
+            if prompt_id in history:
+                status = history[prompt_id].get('status', {})
+                if status.get('status_str') == 'error':
+                    main_logger.error(f"[FACE-GEN] ComfyUI error: {status}")
+                    return False
+                outputs = history[prompt_id].get('outputs', {})
+                for nid in [FINAL_OUTPUT_NODE, "8", "12"]:
+                    node_out = outputs.get(nid, {})
+                    if 'images' in node_out:
+                        for img in node_out['images']:
+                            image_data = get_comfyui_image(
+                                img['filename'],
+                                img.get('subfolder', ''),
+                                img.get('type', 'output'),
+                            )
+                            if image_data and is_valid_image_data(image_data):
+                                os.makedirs(os.path.dirname(HEATHER_FACE_IMAGE), exist_ok=True)
+                                with open(HEATHER_FACE_IMAGE, 'wb') as f:
+                                    f.write(image_data)
+                                main_logger.info(
+                                    f"[FACE-GEN] Saved face reference: {HEATHER_FACE_IMAGE} "
+                                    f"({len(image_data)} bytes)"
+                                )
+                                # Reset cached upload name so it gets re-uploaded next generation
+                                global _comfyui_face_image_name
+                                _comfyui_face_image_name = None
+                                return True
+            time.sleep(3)
+
+        main_logger.error("[FACE-GEN] Portrait generation timed out")
+    except Exception as e:
+        main_logger.error(f"[FACE-GEN] Portrait generation failed: {e}")
+    return False
+
 # ============================================================================
 # AI RESPONSE FUNCTIONS
 # ============================================================================
@@ -7275,6 +7435,10 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     # Negative prompt is set in the workflow JSON directly — do not overwrite it here
 
     # Set face image for ReActor — upload to ComfyUI input dir first if needed
+    # If face reference is missing, attempt to generate it now before proceeding
+    if not check_heather_face():
+        main_logger.warning("[FACE-GEN] Face reference missing at generation time — attempting to generate now")
+        generate_face_reference()
     if FACE_IMAGE_NODE in workflow:
         face_name = ensure_face_image_uploaded() or os.path.basename(HEATHER_FACE_IMAGE)
         workflow[FACE_IMAGE_NODE]["inputs"]["image"] = face_name
@@ -10829,6 +10993,11 @@ async def main():
 
     # Build LoRA registry in background (reads safetensors headers + Civitai lookups)
     threading.Thread(target=build_lora_registry, daemon=True, name="lora-registry").start()
+
+    # Generate face reference portrait if missing
+    if not check_heather_face():
+        main_logger.warning(f"[FACE-GEN] {HEATHER_FACE_IMAGE} not found — will auto-generate from persona")
+        threading.Thread(target=generate_face_reference, daemon=True, name="face-gen").start()
 
     main_logger.info("Bot API is running! Press Ctrl+C to stop.")
 
