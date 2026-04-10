@@ -570,6 +570,8 @@ FACE_IMAGE_NODE = "10"
 FINAL_OUTPUT_NODE = "9"  # Save FINAL (Face Swapped + Blended)
 HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", os.path.join(CONFIG_DIR, "heather_face.png"))
 FLUX_GUIDANCE = 5.0
+COMFYUI_LORAS_DIR = os.getenv("COMFYUI_LORAS_DIR", "/app/ComfyUI/models/loras")
+LORA_REGISTRY_PATH = os.path.join(DATA_DIR, "lora_registry.json")
 EMMA_HIKING_PHOTO = "sfw/casual/518393309_24449331331317269_8182893831074081262_n.jpg"
 EMMA_HIKING_ID = "sfw_casual_068"
 
@@ -6449,6 +6451,277 @@ def _lora_available(lora_name: str) -> bool:
         main_logger.warning(f"[COMFYUI] LoRA not available, bypassing: {lora_name}")
     return available
 
+# =============================================================================
+# LORA REGISTRY — dynamic metadata from safetensors headers + Civitai API
+# =============================================================================
+
+LORA_REGISTRY: Dict[str, dict] = {}   # filename → {trigger_words, description, tags, source}
+
+def _read_safetensors_metadata(path: str) -> dict:
+    """Read the __metadata__ block from a safetensors file header without loading weights."""
+    import struct as _struct
+    try:
+        with open(path, "rb") as f:
+            length = _struct.unpack("<Q", f.read(8))[0]
+            if length > 10 * 1024 * 1024:   # sanity: header shouldn't exceed 10 MB
+                return {}
+            header = json.loads(f.read(length))
+        return header.get("__metadata__", {})
+    except Exception:
+        return {}
+
+def _compute_sha256(path: str) -> Optional[str]:
+    """SHA-256 hash of a file (for Civitai lookup). Returns None on error."""
+    import hashlib as _hashlib
+    try:
+        h = _hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+def _civitai_lookup(sha256: str) -> dict:
+    """Query Civitai by SHA-256 hash. Returns dict with trigger_words, description, tags."""
+    try:
+        resp = requests.get(
+            f"https://civitai.com/api/v1/model-versions/by-hash/{sha256}",
+            timeout=10,
+            headers={"User-Agent": "heatherbot/4.0"},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "trigger_words": data.get("trainedWords", []),
+                "description":   (data.get("description") or "")[:300],
+                "tags":          [t.get("name", "") for t in data.get("model", {}).get("tags", [])],
+                "nsfw":          data.get("model", {}).get("nsfw", False),
+            }
+    except Exception:
+        pass
+    return {}
+
+def _lora_file_path(filename: str) -> Optional[str]:
+    """Return the full filesystem path for a LoRA filename, or None if not found."""
+    # ComfyUI may use subdirectories; do a shallow search
+    base = COMFYUI_LORAS_DIR
+    direct = os.path.join(base, filename)
+    if os.path.exists(direct):
+        return direct
+    try:
+        for root, _, files in os.walk(base):
+            if filename in files:
+                return os.path.join(root, filename)
+    except Exception:
+        pass
+    return None
+
+def _save_lora_registry() -> None:
+    try:
+        with open(LORA_REGISTRY_PATH, "w") as f:
+            json.dump(LORA_REGISTRY, f, indent=2)
+    except Exception as e:
+        main_logger.warning(f"[LORA] Could not save registry: {e}")
+
+def build_lora_registry() -> None:
+    """Scan available LoRAs, read safetensors metadata, query Civitai, cache to disk.
+
+    Runs in a background thread at startup. Results stored in LORA_REGISTRY.
+    """
+    global LORA_REGISTRY
+
+    # Load existing cache
+    if os.path.exists(LORA_REGISTRY_PATH):
+        try:
+            with open(LORA_REGISTRY_PATH) as f:
+                LORA_REGISTRY = json.load(f)
+            main_logger.info(f"[LORA] Loaded registry cache: {len(LORA_REGISTRY)} entries")
+        except Exception:
+            LORA_REGISTRY = {}
+
+    available = get_comfyui_loras()
+    if not available:
+        main_logger.warning("[LORA] No LoRAs found in ComfyUI — registry build skipped")
+        return
+
+    changed = False
+    for filename in sorted(available):
+        entry = LORA_REGISTRY.get(filename, {})
+        path = _lora_file_path(filename)
+
+        # Check if file has changed since last scan (size/mtime)
+        file_sig = None
+        if path:
+            try:
+                st = os.stat(path)
+                file_sig = f"{st.st_size}:{st.st_mtime}"
+            except Exception:
+                pass
+
+        if entry.get("file_sig") == file_sig and entry.get("trigger_words") is not None:
+            continue   # cache is still valid
+
+        main_logger.info(f"[LORA] Scanning: {filename}")
+        new_entry = {"file_sig": file_sig, "trigger_words": [], "description": "", "tags": [], "source": "unknown"}
+
+        # 1. Safetensors header metadata (fast, offline)
+        if path:
+            meta = _read_safetensors_metadata(path)
+            # Common metadata keys for trigger words
+            trigger_from_meta = (
+                meta.get("modelspec.trigger_phrase") or
+                meta.get("trigger_phrase") or
+                meta.get("ss_tag_frequency")        # dict of tag:count — take top keys
+            )
+            if isinstance(trigger_from_meta, dict):
+                # ss_tag_frequency: {dataset: {tag: count}} — flatten and sort
+                all_tags = {}
+                for ds_tags in trigger_from_meta.values():
+                    if isinstance(ds_tags, dict):
+                        all_tags.update(ds_tags)
+                sorted_tags = sorted(all_tags, key=lambda t: all_tags[t], reverse=True)
+                new_entry["trigger_words"] = sorted_tags[:10]
+                new_entry["source"] = "metadata"
+            elif isinstance(trigger_from_meta, str) and trigger_from_meta.strip():
+                new_entry["trigger_words"] = [t.strip() for t in trigger_from_meta.split(",") if t.strip()]
+                new_entry["source"] = "metadata"
+            if meta.get("modelspec.description"):
+                new_entry["description"] = meta["modelspec.description"][:300]
+
+        # 2. Civitai lookup by SHA-256 (network, only if metadata didn't give trigger words)
+        if not new_entry["trigger_words"] and path:
+            sha = _compute_sha256(path)
+            if sha:
+                civ = _civitai_lookup(sha)
+                if civ.get("trigger_words"):
+                    new_entry["trigger_words"] = civ["trigger_words"]
+                    new_entry["source"] = "civitai"
+                if civ.get("description"):
+                    new_entry["description"] = civ["description"]
+                if civ.get("tags"):
+                    new_entry["tags"] = civ["tags"]
+
+        LORA_REGISTRY[filename] = new_entry
+        changed = True
+        main_logger.info(
+            f"[LORA] {filename}: triggers={new_entry['trigger_words'][:2]} source={new_entry['source']}"
+        )
+
+    if changed:
+        _save_lora_registry()
+    main_logger.info(f"[LORA] Registry ready: {len(LORA_REGISTRY)} LoRAs")
+
+# Scene-specific LoRAs to skip in dynamic selection (always-on, handled separately)
+_ALWAYS_ON_LORAS = {"NSFW_master.safetensors", "flux-female-anatomy.safetensors"}
+
+def _select_loras_for_scene(scene_text: str, is_nsfw: bool) -> List[tuple]:
+    """Ask the LLM which scene-specific LoRAs to inject for this image.
+
+    Returns list of (filename, trigger_word) pairs in injection order.
+    Falls back to keyword-based detection if LLM call fails.
+    """
+    # Build menu of available scene-specific LoRAs from registry
+    candidates = {
+        fname: entry for fname, entry in LORA_REGISTRY.items()
+        if fname not in _ALWAYS_ON_LORAS and _lora_available(fname)
+    }
+    if not candidates:
+        return _select_loras_keyword_fallback(scene_text)
+
+    menu_lines = []
+    for fname, entry in candidates.items():
+        triggers = entry.get("trigger_words", [])
+        desc = entry.get("description", "")
+        trigger_str = ", ".join(f'"{t}"' for t in triggers[:2]) if triggers else "no trigger words"
+        menu_lines.append(f'- {fname}: triggers={trigger_str}  desc="{desc[:120]}"')
+    menu = "\n".join(menu_lines)
+
+    try:
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You select LoRA models for a ComfyUI image generation pipeline. "
+                            "Given a scene description and a list of available LoRAs with their "
+                            "trigger words, return a JSON array of filenames that apply to this scene. "
+                            "Only include LoRAs that are clearly relevant. "
+                            "Return ONLY a JSON array like: [\"file1.safetensors\", \"file2.safetensors\"] "
+                            "or [] if none apply. No explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Scene: {scene_text[:400]}\n\nAvailable LoRAs:\n{menu}",
+                    },
+                ],
+                "temperature": 0.1,
+                "max_tokens": 80,
+                "stream": False,
+            },
+            timeout=8,
+        )
+
+        if response.status_code == 200:
+            raw = response.json()["choices"][0]["message"]["content"].strip()
+            # Extract JSON array from response
+            import re as _re3
+            match = _re3.search(r'\[.*?\]', raw, _re3.DOTALL)
+            if match:
+                selected = json.loads(match.group(0))
+                result = []
+                for fname in selected:
+                    if fname in candidates and _lora_available(fname):
+                        triggers = candidates[fname].get("trigger_words", [])
+                        trigger = triggers[0] if triggers else ""
+                        result.append((fname, trigger))
+                main_logger.info(f"[LORA] LLM selected: {[r[0] for r in result]}")
+                return result
+    except Exception as e:
+        main_logger.warning(f"[LORA] LLM selection failed, using keyword fallback: {e}")
+
+    return _select_loras_keyword_fallback(scene_text)
+
+def _select_loras_keyword_fallback(scene_text: str) -> List[tuple]:
+    """Keyword-based LoRA selection — used when LLM selection fails."""
+    result = []
+    text = scene_text.lower()
+
+    dildo_kw = ["dildo", "vibrator", "sex toy", "butt plug", "using a toy", "strap-on", "strapon"]
+    if any(k in text for k in dildo_kw):
+        fname = "flux1-dildo1.safetensors"
+        triggers = LORA_REGISTRY.get(fname, {}).get("trigger_words", [])
+        result.append((fname, triggers[0] if triggers else ""))
+
+    handjob_kw = [
+        "handjob", "hand job", "happy ending", "erotic massage", "sensual massage",
+        "stroking his cock", "stroking his dick", "rubbing his cock", "pumping his",
+        "customer's cock", "client's cock", "__handjob_lora__",
+    ]
+    if any(k in text for k in handjob_kw):
+        fname = "Nsfw_Handjob.safetensors"
+        triggers = LORA_REGISTRY.get(fname, {}).get("trigger_words", [])
+        trigger = triggers[0] if triggers else "Explicit photograph of a woman holding a man's erect penis"
+        result.append((fname, trigger))
+
+    fingering_kw = [
+        "fingering", "finger her", "finger me", "masturbat", "touching herself",
+        "female client", "female customer", "touch yourself", "finger yourself",
+        "__pussygrab_lora__",
+    ]
+    if any(k in text for k in fingering_kw):
+        fname = "Fingering.safetensors"
+        triggers = LORA_REGISTRY.get(fname, {}).get("trigger_words", [])
+        trigger = triggers[0] if triggers else "masturbating"
+        result.append((fname, trigger))
+
+    return result
+
+
 def upload_image_to_comfyui(filepath: str) -> Optional[str]:
     """Upload an image file to ComfyUI's input directory. Returns the filename ComfyUI assigned."""
     try:
@@ -7078,112 +7351,32 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
             else:
                 main_logger.info("NSFW image — NSFW Master LoRA only")
 
-            # Dildo/sex toy LoRA — inject when prompt references toys/insertables
-            dildo_lora = "flux1-dildo1.safetensors"
-            dildo_keywords = [
-                "dildo", "vibrator", "sex toy", "butt plug",
-                "using a toy", "with a toy", "her toy", "the toy",
-                "insertable", "strap-on", "strapon",
-            ]
-            needs_dildo_lora = any(kw in _lora_scan for kw in dildo_keywords)
-            if needs_dildo_lora and _lora_available(dildo_lora):
-                workflow["22"] = {
+            # Scene-specific LoRAs — selected dynamically by LLM from the registry
+            scene_loras = _select_loras_for_scene(_lora_scan, is_nsfw)
+            dyn_node_id = 22
+            for lora_file, trigger_word in scene_loras:
+                if not _lora_available(lora_file):
+                    continue
+                node_key = str(dyn_node_id)
+                workflow[node_key] = {
                     "inputs": {
-                        "lora_name": dildo_lora,
-                        "strength_model": 0.75,
-                        "strength_clip": 0.75,
-                        "model": [last_model_node, 0],
-                        "clip": [last_clip_node, 1],
-                    },
-                    "class_type": "LoraLoader",
-                    "_meta": {"title": "Dildo/Toy Detail"}
-                }
-                last_model_node = "22"
-                last_clip_node = "22"
-                main_logger.info("NSFW image — dildo/toy LoRA injected")
-
-            # Handjob/erotic massage LoRA — inject when conversation involves
-            # erotic massage, happy ending, or manual stimulation
-            handjob_lora = "Nsfw_Handjob.safetensors"
-            handjob_keywords = [
-                "erotic massage", "sensual massage", "happy ending",
-                "hand job", "handjob", "stroking his", "stroking the",
-                "jerking", "jerk him", "jerk me",
-                "stroking his cock", "stroking his dick", "stroking his penis",
-                "stroking your", "rubbing his cock", "rubbing his dick",
-                "pumping his", "gripping his cock", "gripping his dick",
-                "wrap her hand", "wrapping her hand", "her hand on his cock",
-                "her hand around his", "grab his cock", "grabbing his cock",
-                "customer's dick", "customer's cock", "client's dick", "client's cock",
-                # marker appended by generate_and_send_image_async from conversation scan
-                "__handjob_lora__",
-            ]
-            needs_handjob_lora = any(kw in _lora_scan for kw in handjob_keywords)
-            if needs_handjob_lora and _lora_available(handjob_lora):
-                workflow["23"] = {
-                    "inputs": {
-                        "lora_name": handjob_lora,
+                        "lora_name": lora_file,
                         "strength_model": 0.8,
                         "strength_clip": 0.8,
                         "model": [last_model_node, 0],
                         "clip": [last_clip_node, 1],
                     },
                     "class_type": "LoraLoader",
-                    "_meta": {"title": "Handjob/Erotic Massage"}
+                    "_meta": {"title": lora_file},
                 }
-                last_model_node = "23"
-                last_clip_node = "23"
-                # Determine which trigger phrase best fits the scene
-                if any(w in _lora_scan for w in ["cum", "facial", "finish", "fluid", "come on"]):
-                    trigger = "white viscous fluid on her face"
-                elif any(w in _lora_scan for w in ["oral", "tongue", "lick", "suck", "mouth"]):
-                    trigger = "tongue extended"
-                else:
-                    trigger = "Explicit photograph of a woman holding a man's erect penis"
-                # Prepend trigger to full_prompt so the LoRA activates
-                full_prompt = f"{trigger}, {full_prompt}"
-                if POSITIVE_PROMPT_NODE in workflow:
-                    workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-                main_logger.info(f"NSFW image — handjob LoRA injected | trigger: {trigger}")
-
-            # Fingering / masturbation LoRA — female client being fingered OR character fingering herself
-            fingering_lora = "Fingering.safetensors"
-            fingering_keywords = [
-                # female client being fingered
-                "fingering", "finger her", "finger me", "fingers her",
-                "fingered", "being fingered", "she fingers",
-                "female client", "woman client",
-                "female customer", "woman customer", "lady client", "lady customer",
-                # character self-masturbating (herself = narration, yourself = user addressing her)
-                "masturbat", "touching herself", "fingering herself",
-                "playing with herself", "rubbing herself", "rubbing her pussy",
-                "touching her pussy", "fingers in her pussy", "fingers inside",
-                "pleasure herself", "pleasuring herself",
-                "touch yourself", "finger yourself", "play with yourself",
-                "rub yourself", "pleasure yourself", "touch your pussy",
-                "finger your pussy", "rub your pussy", "fingers in your pussy",
-                # conversation-scan marker
-                "__pussygrab_lora__",
-            ]
-            needs_fingering_lora = any(kw in _lora_scan for kw in fingering_keywords)
-            if needs_fingering_lora and _lora_available(fingering_lora):
-                workflow["24"] = {
-                    "inputs": {
-                        "lora_name": fingering_lora,
-                        "strength_model": 0.8,
-                        "strength_clip": 0.8,
-                        "model": [last_model_node, 0],
-                        "clip": [last_clip_node, 1],
-                    },
-                    "class_type": "LoraLoader",
-                    "_meta": {"title": "Fingering / Masturbation"}
-                }
-                last_model_node = "24"
-                last_clip_node = "24"
-                full_prompt = f"masturbating, {full_prompt}"
-                if POSITIVE_PROMPT_NODE in workflow:
-                    workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-                main_logger.info("NSFW image — fingering/masturbation LoRA injected")
+                last_model_node = node_key
+                last_clip_node = node_key
+                if trigger_word:
+                    full_prompt = f"{trigger_word}, {full_prompt}"
+                    if POSITIVE_PROMPT_NODE in workflow:
+                        workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+                main_logger.info(f"NSFW image — dynamic LoRA injected: {lora_file} | trigger: {trigger_word}")
+                dyn_node_id += 1
 
             workflow["7"]["inputs"]["model"] = [last_model_node, 0]
             workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
@@ -10633,6 +10826,9 @@ async def main():
     asyncio.get_running_loop().create_task(precache_videos())
     asyncio.get_running_loop().create_task(video_refresh_loop())
     asyncio.get_running_loop().create_task(_startup_catchup())
+
+    # Build LoRA registry in background (reads safetensors headers + Civitai lookups)
+    threading.Thread(target=build_lora_registry, daemon=True, name="lora-registry").start()
 
     main_logger.info("Bot API is running! Press Ctrl+C to stop.")
 
