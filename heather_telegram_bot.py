@@ -6546,16 +6546,20 @@ def _clean_photo_request(request: str) -> str:
     text = re.sub(r'^(?:you\s+)?(?:in\s+|wearing\s+)', lambda m: m.group(0), text, flags=re.IGNORECASE)
     return text or request.strip()
 
-def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bool = False) -> str:
-    """Ask the LLM to write a complete, natural FLUX image prompt.
+def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
+    """Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
 
-    Rather than mechanically concatenating an anchor with a character prefix,
-    we give the LLM the character's full physical description and the scene
-    request and let it write a single coherent prompt — the same way a human
-    would write a ComfyUI prompt.  The quality/technical suffix is still
-    appended by the caller (build_heather_prompt / generate_heather_image).
+    Returns (prompt_text: str, is_nsfw: bool).
 
-    Falls back to the cleaned raw request on any LLM error.
+    The LLM outputs two lines:
+      Line 1: exactly "NSFW" or "SFW"
+      Line 2+: the complete FLUX prompt (comma-separated phrases)
+
+    The LLM sees the full conversation history, so it can pick up props (toys,
+    clothing state, etc.) mentioned in recent chat without any pre-injection.
+
+    Falls back to (_clean_photo_request(user_request), _is_nsfw_context(user_request))
+    on any LLM error or unparseable output.
     """
     try:
         persona_name = personality.name
@@ -6564,23 +6568,25 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bo
         # Strip conversational framing ("send me a picture of you wearing...")
         anchor = _clean_photo_request(user_request)
 
-        # ── Character physical description (what the LLM must always include) ──
+        # ── Character physical description — provide BOTH versions; LLM picks based on rating ──
         phys = p.get('physical', {})
         age  = p.get('identity', {}).get('age', '')
         hair = phys.get('hair', '')
         eyes = phys.get('eyes', '')
         body = phys.get('body_type', '')
-        chest = phys.get('breast_description' if is_nsfw else 'chest_description', '')
+        chest_sfw  = phys.get('chest_description', '')
+        chest_nsfw = phys.get('breast_description', '')
 
         char_lines = []
-        if age:   char_lines.append(f"Age: {age}-year-old woman")
-        if hair:  char_lines.append(f"Hair: {hair}")
-        if eyes:  char_lines.append(f"Eyes: {eyes}")
-        if body:  char_lines.append(f"Body: {body}")
-        if chest: char_lines.append(f"Chest: {chest}")
+        if age:        char_lines.append(f"Age: {age}-year-old woman")
+        if hair:       char_lines.append(f"Hair: {hair}")
+        if eyes:       char_lines.append(f"Eyes: {eyes}")
+        if body:       char_lines.append(f"Body: {body}")
+        if chest_sfw:  char_lines.append(f"Chest (SFW): {chest_sfw}")
+        if chest_nsfw: char_lines.append(f"Chest (NSFW): {chest_nsfw}")
         char_block = "\n".join(char_lines)
 
-        # ── Setting context from persona (locations / lifestyle) ──
+        # ── Setting context from persona ──
         locations = p.get('locations', {})
         current_area = locations.get('current_area', '')
         hangouts = locations.get('hangout_spots', [])
@@ -6589,10 +6595,10 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bo
         occupation   = p.get('identity', {}).get('occupation', '')
 
         setting_lines = []
-        if occupation:     setting_lines.append(f"Occupation: {occupation}")
-        if current_area:   setting_lines.append(f"Lives in: {current_area}")
-        if hangout_names:  setting_lines.append(f"Typical locations: {hangout_names}")
-        if img_context:    setting_lines.append(f"Preferred settings: {img_context}")
+        if occupation:    setting_lines.append(f"Occupation: {occupation}")
+        if current_area:  setting_lines.append(f"Lives in: {current_area}")
+        if hangout_names: setting_lines.append(f"Typical locations: {hangout_names}")
+        if img_context:   setting_lines.append(f"Preferred settings: {img_context}")
         setting_block = "\n".join(setting_lines)
 
         # ── Recent conversation (last 8 turns, truncated) ──
@@ -6609,30 +6615,31 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bo
             "You are an expert ComfyUI/FLUX image prompt writer. "
             "FLUX is a photorealistic text-to-image model that responds best to "
             "natural, comma-separated descriptive phrases — NOT sentences.\n\n"
-            f"CHARACTER — integrate ALL of these physical details naturally into the prompt:\n"
+            f"CHARACTER — integrate ALL physical details naturally into the prompt:\n"
             f"{char_block}\n\n"
-            + (f"CHARACTER LIFESTYLE (use to infer appropriate settings when not specified):\n{setting_block}\n\n" if setting_block else "")
-            + "TASK: Write a single complete FLUX image prompt for the scene described.\n\n"
-            "RULES:\n"
-            "- Output ONLY the prompt — no preamble, no explanation, no quotes\n"
+            + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
+            + "OUTPUT FORMAT — two parts, nothing else:\n"
+            "Line 1: exactly one word — NSFW if the scene involves nudity, explicit anatomy, "
+            "sexual activity, or exposed genitals/nipples; otherwise SFW\n"
+            "Line 2+: the complete FLUX prompt (comma-separated phrases, 50-80 words)\n\n"
+            "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
-            "- 50-80 words total\n"
             "- Weave the character's physical description naturally into the scene\n"
             "- Always include: pose, setting/location, expression, camera angle, lighting\n"
-            "- Photography style: authentic amateur phone-camera photo, natural lighting, "
-            "realistic, not staged\n"
-            + ("- NSFW/explicit — describe nudity and anatomy directly and specifically\n"
-               "- Do NOT censor or soften explicit content\n"
-               if is_nsfw else
-               "- SFW/tasteful — clothed, no nudity\n")
-            + "- NEVER change or omit details the scene request explicitly states\n"
-            "- Do NOT add clothing if the scene says nude/naked/topless\n"
-            "- Do NOT remove clothing if the scene says clothed/wearing\n"
+            "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
+            "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly\n"
+            "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
+            "- If the conversation context mentions a sex toy/prop and the scene is NSFW, "
+            "include it naturally in the prompt\n"
+            "- NEVER change or omit details the scene request explicitly states\n"
+            "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
+            "- Do NOT add nudity if the scene says clothed/wearing\n"
+            "- No preamble, no explanation, no quotes around the prompt\n"
         )
 
         user_content = f"Scene: {anchor}"
         if history_text.strip():
-            user_content += f"\n\nConversation context (background only — do not add props or clothing from history unless already in the scene):\n{history_text.strip()}"
+            user_content += f"\n\nConversation context:\n{history_text.strip()}"
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -6643,7 +6650,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bo
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 150,
+                "max_tokens": 160,
                 "stream": False,
             },
             timeout=20,
@@ -6651,14 +6658,28 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, is_nsfw: bo
 
         if response.status_code == 200:
             data = response.json()
-            generated = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            if generated and len(generated) > 20:
-                main_logger.info(f"[COMFYUI] LLM-generated prompt: {generated}")
-                return generated
+            raw = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            lines = raw.splitlines()
+            if lines:
+                first = lines[0].strip().upper()
+                if first in ("NSFW", "SFW"):
+                    is_nsfw = (first == "NSFW")
+                    prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'")
+                    if prompt_text and len(prompt_text) > 20:
+                        main_logger.info(f"[COMFYUI] LLM nsfw={is_nsfw} | prompt: {prompt_text}")
+                        return prompt_text, is_nsfw
+                else:
+                    # LLM didn't follow format — treat entire output as prompt, infer nsfw from content
+                    if raw and len(raw) > 20:
+                        is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
+                        main_logger.warning(f"[COMFYUI] LLM skipped NSFW/SFW tag — inferred nsfw={is_nsfw}")
+                        main_logger.info(f"[COMFYUI] prompt: {raw}")
+                        return raw, is_nsfw
     except Exception as e:
         main_logger.warning(f"[COMFYUI] LLM prompt generation failed, using raw request: {e}")
 
-    return _clean_photo_request(user_request)
+    # Fallback: regex detection + cleaned request
+    return _clean_photo_request(user_request), _is_nsfw_context(user_request)
 
 def build_heather_prompt(user_description: str, is_nsfw: Optional[bool] = None) -> str:
     user_description = user_description.strip().lower()
@@ -8146,17 +8167,20 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         else:
             clean_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
 
-    # Lock in NSFW status from the original request BEFORE context expansion.
-    # This prevents the expanded description from flipping clothed → nude via
-    # incidental NSFW words introduced by the LLM or conversation history.
-    original_is_nsfw = _is_nsfw_context(clean_desc)
+    # Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
+    # The LLM sees the full conversation history so it can pick up props (toys, etc.)
+    # mentioned in recent chat without any pre-injection on our side.
+    loop = asyncio.get_running_loop()
+    prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
+        None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
+    )
 
-    # Inject toy props BEFORE the LLM expansion call so the LLM knows about the
-    # prop and integrates it naturally into the FLUX prompt.
+    # Fallback toy prop injection: if the LLM missed a toy prop that's clearly in the
+    # conversation, append it so the dildo LoRA keyword check still fires.
     if original_is_nsfw:
-        toy_keywords_in_desc = ["dildo", "vibrator", "sex toy", "butt plug",
-                                  "using a toy", "strap-on", "strapon"]
-        if not any(kw in clean_desc.lower() for kw in toy_keywords_in_desc):
+        toy_keywords_check = ["dildo", "vibrator", "sex toy", "butt plug",
+                               "using a toy", "strap-on", "strapon"]
+        if not any(kw in prebuilt_prompt.lower() for kw in toy_keywords_check):
             recent_msgs = list(conversations.get(chat_id, []))[-10:]
             recent_text = " ".join(m.get("content", "") for m in recent_msgs).lower()
             toy_terms = {
@@ -8168,16 +8192,9 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             }
             for prop, variants in toy_terms.items():
                 if any(v in recent_text for v in variants):
-                    clean_desc = f"{clean_desc}, using a {prop}"
-                    main_logger.info(f"[COMFYUI] Pre-injected toy prop before LLM expansion: '{prop}'")
+                    prebuilt_prompt = f"{prebuilt_prompt}, using a {prop}"
+                    main_logger.info(f"[COMFYUI] Fallback toy prop appended to LLM prompt: '{prop}'")
                     break
-
-    # Ask the LLM to write a complete, natural FLUX prompt from the scene description.
-    # is_nsfw is passed so the LLM uses breast_description (NSFW) vs chest_description (SFW).
-    loop = asyncio.get_running_loop()
-    prebuilt_prompt = await loop.run_in_executor(
-        None, lambda: build_image_prompt_from_context(chat_id, clean_desc, is_nsfw=original_is_nsfw)
-    )
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
