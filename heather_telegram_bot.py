@@ -7036,6 +7036,12 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
         last_model_node = "1"  # checkpoint model output
         last_clip_node = "1"   # checkpoint clip output
 
+        # Combined search text: original request + LLM-generated prompt.
+        # LoRA keyword checks scan both so that descriptive language the LLM
+        # added (e.g. "hand stroking cock") triggers the right LoRA even when
+        # the raw user request was more casual ("give him a handjob").
+        _lora_scan = (user_description + " " + (prebuilt_prompt or "")).lower()
+
         if has_nsfw_lora:
             workflow["20"] = {
                 "inputs": {
@@ -7053,7 +7059,7 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
 
             vulva_keywords = ["pussy", "vulva", "labia", "spread", "laying", "laying_down",
                               "legs apart", "legs spread", "exposed", "closeup", "close up"]
-            needs_anatomy_lora = any(kw in user_description.lower() for kw in vulva_keywords)
+            needs_anatomy_lora = any(kw in _lora_scan for kw in vulva_keywords)
             if needs_anatomy_lora and _lora_available(anatomy_lora):
                 workflow["21"] = {
                     "inputs": {
@@ -7079,7 +7085,7 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 "using a toy", "with a toy", "her toy", "the toy",
                 "insertable", "strap-on", "strapon",
             ]
-            needs_dildo_lora = any(kw in user_description.lower() for kw in dildo_keywords)
+            needs_dildo_lora = any(kw in _lora_scan for kw in dildo_keywords)
             if needs_dildo_lora and _lora_available(dildo_lora):
                 workflow["22"] = {
                     "inputs": {
@@ -7112,7 +7118,7 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 # marker appended by generate_and_send_image_async from conversation scan
                 "__handjob_lora__",
             ]
-            needs_handjob_lora = any(kw in user_description.lower() for kw in handjob_keywords)
+            needs_handjob_lora = any(kw in _lora_scan for kw in handjob_keywords)
             if needs_handjob_lora and _lora_available(handjob_lora):
                 workflow["23"] = {
                     "inputs": {
@@ -7128,10 +7134,9 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 last_model_node = "23"
                 last_clip_node = "23"
                 # Determine which trigger phrase best fits the scene
-                desc_lower = user_description.lower()
-                if any(w in desc_lower for w in ["cum", "facial", "finish", "fluid", "come on"]):
+                if any(w in _lora_scan for w in ["cum", "facial", "finish", "fluid", "come on"]):
                     trigger = "white viscous fluid on her face"
-                elif any(w in desc_lower for w in ["oral", "tongue", "lick", "suck", "mouth"]):
+                elif any(w in _lora_scan for w in ["oral", "tongue", "lick", "suck", "mouth"]):
                     trigger = "tongue extended"
                 else:
                     trigger = "Explicit photograph of a woman holding a man's erect penis"
@@ -7160,7 +7165,7 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 # conversation-scan marker
                 "__pussygrab_lora__",
             ]
-            needs_fingering_lora = any(kw in user_description.lower() for kw in fingering_keywords)
+            needs_fingering_lora = any(kw in _lora_scan for kw in fingering_keywords)
             if needs_fingering_lora and _lora_available(fingering_lora):
                 workflow["24"] = {
                     "inputs": {
