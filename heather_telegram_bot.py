@@ -6644,12 +6644,19 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         # ── Random penis size injection ──
         # If the scene depicts or implies a penis and no size is already stated,
         # pick one so the LLM includes it naturally rather than leaving it vague.
+        # Female-client fingering scenes are excluded — no penis is involved.
         _penis_scene_keywords = [
             "penis", "cock", "dick", "erection", "erect",
             "handjob", "hand job", "blowjob", "blow job", "fellatio",
             "fucking", "intercourse", "penetrat", "cumshot", "facial",
             "happy ending", "erotic massage", "sensual massage",
             "__handjob_lora__",
+        ]
+        # If the scene is clearly about fingering a woman (no male recipient implied),
+        # do not inject a penis size.
+        _female_client_keywords = [
+            "finger her", "fingering her", "finger me", "fingering me",
+            "female client", "woman client", "her pussy", "my pussy",
         ]
         _size_already_stated = [
             "inch", "inches", '"', "big", "huge", "massive", "small", "tiny",
@@ -6669,9 +6676,10 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         ]
         anchor_and_history = (anchor + " " + history_text).lower()
         _scene_has_penis = any(kw in anchor_and_history for kw in _penis_scene_keywords)
+        _female_client_scene = any(kw in anchor_and_history for kw in _female_client_keywords)
         _size_specified = any(kw in anchor_and_history for kw in _size_already_stated)
         _chosen_size = None
-        if _scene_has_penis and not _size_specified:
+        if _scene_has_penis and not _female_client_scene and not _size_specified:
             _chosen_size = random.choice(_penis_size_options)
 
         user_content = f"Scene: {anchor}"
@@ -6871,6 +6879,9 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 "erotic massage", "sensual massage", "happy ending",
                 "hand job", "handjob", "stroking his", "stroking the",
                 "jerking", "jerk him", "jerk me",
+                # female client scenario
+                "fingering", "finger her", "finger me", "fingers her",
+                "female client", "woman client",
                 # marker appended by generate_and_send_image_async from conversation scan
                 "__handjob_lora__",
             ]
@@ -8281,13 +8292,16 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         handjob_conv_triggers = [
             "erotic massage", "sensual massage", "happy ending",
             "hand job", "handjob", "jerk", "stroking",
+            # female client scenario
+            "fingering", "finger her", "finger me", "fingers her",
+            "female client", "woman client",
         ]
         if not any(kw in clean_desc.lower() for kw in handjob_conv_triggers):
             recent_msgs_hj = list(conversations.get(chat_id, []))[-15:]
             recent_text_hj = " ".join(m.get("content", "") for m in recent_msgs_hj).lower()
             if any(kw in recent_text_hj for kw in handjob_conv_triggers):
                 clean_desc = f"{clean_desc} __handjob_lora__"
-                main_logger.info("[COMFYUI] Handjob LoRA marker injected from conversation context")
+                main_logger.info("[COMFYUI] Erotic massage LoRA marker injected from conversation context")
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
