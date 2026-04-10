@@ -5757,7 +5757,23 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             else:
                 gender_context = "\n\n[You don't know this person's gender yet — avoid gendered pronouns until they reveal it.]"
 
-            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context
+            # User name context — use their Telegram name if known
+            _uinfo = user_info.get(chat_id, {})
+            _user_first = _uinfo.get('first_name', '').strip()
+            _char_name = personality.name
+            if _user_first and _user_first.lower() != _char_name.lower():
+                name_context = (
+                    f"\n\n[The person you're talking to is named {_user_first}. "
+                    f"You may use their name occasionally — but naturally, like a real person would, "
+                    f"not in every message. NEVER call them '{_char_name}' — that is YOUR name.]"
+                )
+            else:
+                name_context = (
+                    f"\n\n[CRITICAL: NEVER address the user by your own name ({_char_name}). "
+                    f"You are {_char_name}. The person you're talking to is someone else entirely.]"
+                )
+
+            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context + name_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -6557,6 +6573,20 @@ _STATUS_FALLBACKS = [
     "one minute 📸",
 ]
 
+def _name_context_snippet(chat_id: int) -> str:
+    """Return a one-line system prompt addition about the user's name."""
+    _uinfo = user_info.get(chat_id, {})
+    _user_first = _uinfo.get('first_name', '').strip()
+    _char_name = personality.name
+    if _user_first and _user_first.lower() != _char_name.lower():
+        return (
+            f" The person you're talking to is named {_user_first} — you may use "
+            f"their name occasionally but naturally, not every message. "
+            f"NEVER call them '{_char_name}' — that is your own name."
+        )
+    return f" NEVER address the user by your own name ({_char_name})."
+
+
 def _generate_photo_status(chat_id: int, user_request: str) -> str:
     """Ask the LLM for a short in-character 'I'm taking the photo' message.
 
@@ -6582,6 +6612,7 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
             "getting ready — like a quick text acknowledging the request and building "
             "anticipation. React to what was actually asked for. "
             "No asterisk actions. 1 emoji max. Stay in character."
+            + _name_context_snippet(chat_id)
         )
 
         user_content = f"Photo request: {user_request}"
@@ -6647,6 +6678,7 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -
             "You just took and sent a photo that the user requested. "
             "Write ONE short caption (1-2 sentences max) to send alongside it — "
             "something you'd actually text, reacting naturally to what was asked for "
+            + _name_context_snippet(chat_id) + " "
             "and the mood of the conversation. "
             "No asterisk actions. Use 1 emoji max. Stay in character. "
             "Do NOT describe the photo — just react to sending it."
