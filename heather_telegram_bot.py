@@ -6641,7 +6641,42 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- 'fingering' = manual stimulation of female genitalia\n"
         )
 
+        # ── Random penis size injection ──
+        # If the scene depicts or implies a penis and no size is already stated,
+        # pick one so the LLM includes it naturally rather than leaving it vague.
+        _penis_scene_keywords = [
+            "penis", "cock", "dick", "erection", "erect",
+            "handjob", "hand job", "blowjob", "blow job", "fellatio",
+            "fucking", "intercourse", "penetrat", "cumshot", "facial",
+            "happy ending", "erotic massage", "sensual massage",
+            "__handjob_lora__",
+        ]
+        _size_already_stated = [
+            "inch", "inches", '"', "big", "huge", "massive", "small", "tiny",
+            "thick", "thin", "large", "average", "girthy", "long cock",
+            "giant", "enormous", "sizeable",
+        ]
+        _penis_size_options = [
+            "average-sized cock",
+            "thick average cock",
+            "above-average, thick cock",
+            "long thick cock",
+            "thick 7-inch cock",
+            "long 8-inch cock",
+            "girthy cock",
+            "large thick cock",
+            "massive cock",
+        ]
+        anchor_and_history = (anchor + " " + history_text).lower()
+        _scene_has_penis = any(kw in anchor_and_history for kw in _penis_scene_keywords)
+        _size_specified = any(kw in anchor_and_history for kw in _size_already_stated)
+        _chosen_size = None
+        if _scene_has_penis and not _size_specified:
+            _chosen_size = random.choice(_penis_size_options)
+
         user_content = f"Scene: {anchor}"
+        if _chosen_size:
+            user_content += f"\nPenis size for this scene: {_chosen_size} (not stated by user — weave into the prompt naturally)"
         if history_text.strip():
             user_content += f"\n\nConversation context:\n{history_text.strip()}"
 
