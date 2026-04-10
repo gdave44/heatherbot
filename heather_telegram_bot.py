@@ -3933,6 +3933,11 @@ def _is_nsfw_context(text: str) -> bool:
         "flash me", "flash your",
         "nsfw", "x rated", "x-rated",
         "sexy pic", "dirty pic", "naughty pic", "spicy pic",
+        # manual stimulation — always explicit
+        "fingering", "finger her", "finger me", "fingered",
+        "handjob", "hand job", "jerk off", "jerking off",
+        "happy ending", "erotic massage", "sensual massage",
+        "cumshot", "facial", "cum on",
     ]
     if any(w in text_lower for w in nsfw_words):
         return True
@@ -6688,14 +6693,16 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
             + "OUTPUT FORMAT — two parts, nothing else:\n"
             "Line 1: exactly one word — NSFW if the scene involves nudity, explicit anatomy, "
-            "sexual activity, or exposed genitals/nipples; otherwise SFW\n"
+            "sexual activity, exposed genitals/nipples, manual genital stimulation (fingering, "
+            "handjob), oral sex, penetration, happy ending massage, or any erotic physical "
+            "contact with genitals; otherwise SFW\n"
             "Line 2+: the complete FLUX prompt (comma-separated phrases, 50-80 words)\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
             "- Weave the character's physical description naturally into the scene\n"
             "- Always include: pose, setting/location, expression, camera angle, lighting\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
-            "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly\n"
+            "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
             "- If the conversation context mentions a sex toy/prop and the scene is NSFW, "
             "include it naturally in the prompt\n"
@@ -6706,7 +6713,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "TERMINOLOGY GLOSSARY (interpret these correctly):\n"
             "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
             "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
-            "- 'fingering' = manual stimulation of female genitalia\n"
+            "- 'fingering' = one or more fingers inserted into or rubbing a woman's pussy/vagina — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
         )
 
         # ── Random penis size injection ──
