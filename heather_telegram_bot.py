@@ -6828,7 +6828,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- Any phrase involving stroking, rubbing, pumping, gripping, or wrapping a hand around a cock/dick/penis = a handjob; describe it as manual penile stimulation, NOT a massage stroke\n"
             "- In a massage context, 'stroking his dick/cock/penis' is sexual, not therapeutic — the therapist is masturbating the client\n"
             "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
-            "- 'fingering' = one or more fingers inserted into or rubbing a woman's pussy/vagina — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
+            "- 'fingering' / 'masturbating' / 'touching herself' = one or more fingers inserted into or rubbing a woman's pussy/vagina and/or clit — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
             "- A female customer/client does NOT have a penis or cock — NEVER assign male genitalia to a female character\n"
             "- When the recipient of a happy ending is female: she is being fingered (her pussy stimulated by fingers), not given a handjob\n"
         )
@@ -7123,34 +7123,41 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                     workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
                 main_logger.info(f"NSFW image — handjob LoRA injected | trigger: {trigger}")
 
-            # Pussy grab / fingering LoRA — female client being fingered
-            pussygrab_lora = "couplepussygrab.safetensors"
-            pussygrab_keywords = [
+            # Fingering / masturbation LoRA — female client being fingered OR character fingering herself
+            fingering_lora = "Fingering.safetensors"
+            fingering_keywords = [
+                # female client being fingered
                 "fingering", "finger her", "finger me", "fingers her",
                 "fingered", "being fingered", "she fingers",
                 "female client", "woman client",
-                "pussygrab", "__pussygrab_lora__",
+                "female customer", "woman customer", "lady client", "lady customer",
+                # character self-masturbating
+                "masturbat", "touching herself", "fingering herself",
+                "playing with herself", "rubbing herself", "rubbing her pussy",
+                "touching her pussy", "fingers in her pussy", "fingers inside",
+                "pleasure herself", "pleasuring herself",
+                # conversation-scan marker
+                "__pussygrab_lora__",
             ]
-            needs_pussygrab_lora = any(kw in user_description.lower() for kw in pussygrab_keywords)
-            if needs_pussygrab_lora and _lora_available(pussygrab_lora):
+            needs_fingering_lora = any(kw in user_description.lower() for kw in fingering_keywords)
+            if needs_fingering_lora and _lora_available(fingering_lora):
                 workflow["24"] = {
                     "inputs": {
-                        "lora_name": pussygrab_lora,
+                        "lora_name": fingering_lora,
                         "strength_model": 0.8,
                         "strength_clip": 0.8,
                         "model": [last_model_node, 0],
                         "clip": [last_clip_node, 1],
                     },
                     "class_type": "LoraLoader",
-                    "_meta": {"title": "Couple Pussy Grab / Fingering"}
+                    "_meta": {"title": "Fingering / Masturbation"}
                 }
                 last_model_node = "24"
                 last_clip_node = "24"
-                trigger = "a woman with a man pu55ygrab he is grabbing her pussy"
-                full_prompt = f"{trigger}, {full_prompt}"
+                full_prompt = f"masturbating, {full_prompt}"
                 if POSITIVE_PROMPT_NODE in workflow:
                     workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-                main_logger.info("NSFW image — pussygrab/fingering LoRA injected")
+                main_logger.info("NSFW image — fingering/masturbation LoRA injected")
 
             workflow["7"]["inputs"]["model"] = [last_model_node, 0]
             workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
@@ -8543,18 +8550,20 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                 clean_desc = f"{clean_desc} __handjob_lora__"
                 main_logger.info("[COMFYUI] Handjob LoRA marker injected from conversation context")
 
-        # Fingering / pussy grab (female recipient)
+        # Fingering / masturbation LoRA (female client OR self-masturbation)
         fingering_conv_triggers = [
             "fingering", "finger her", "finger me", "fingers her",
-            "fingered", "female client", "woman client", "pussygrab",
+            "fingered", "female client", "woman client",
             "female customer", "woman customer", "lady client", "lady customer",
+            "masturbat", "touching herself", "fingering herself",
+            "playing with herself", "rubbing herself", "rubbing her pussy",
         ]
         if not any(kw in clean_desc.lower() for kw in fingering_conv_triggers):
             recent_msgs_fg = list(conversations.get(chat_id, []))[-15:]
             recent_text_fg = " ".join(m.get("content", "") for m in recent_msgs_fg).lower()
             if any(kw in recent_text_fg for kw in fingering_conv_triggers):
                 clean_desc = f"{clean_desc} __pussygrab_lora__"
-                main_logger.info("[COMFYUI] Pussygrab LoRA marker injected from conversation context")
+                main_logger.info("[COMFYUI] Fingering/masturbation LoRA marker injected from conversation context")
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
