@@ -6691,12 +6691,15 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             f"CHARACTER — integrate ALL physical details naturally into the prompt:\n"
             f"{char_block}\n\n"
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
-            + "OUTPUT FORMAT — two parts, nothing else:\n"
-            "Line 1: exactly one word — NSFW if the scene involves nudity, explicit anatomy, "
-            "sexual activity, exposed genitals/nipples, manual genital stimulation (fingering, "
-            "handjob), oral sex, penetration, happy ending massage, or any erotic physical "
-            "contact with genitals; otherwise SFW\n"
-            "Line 2+: the complete FLUX prompt (comma-separated phrases, 50-80 words)\n\n"
+            + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
+            "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
+            "  NSFW if the scene involves: nudity, exposed genitals/nipples, manual genital "
+            "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
+            "or any erotic physical contact with genitals. Otherwise SFW.\n"
+            "- Remaining lines: the FLUX prompt (comma-separated phrases, 50-80 words)\n"
+            "EXAMPLE — do it exactly like this:\n"
+            "NSFW\n"
+            "33-year-old woman, long brunette hair, brown eyes, massage table, close-up of therapist fingering female client's pussy, ...\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
             "- Weave the character's physical description naturally into the scene\n"
@@ -6714,6 +6717,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
             "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
             "- 'fingering' = one or more fingers inserted into or rubbing a woman's pussy/vagina — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
+            "- A female customer/client does NOT have a penis or cock — NEVER assign male genitalia to a female character\n"
+            "- When the recipient of a happy ending is female: she is being fingered (her pussy stimulated by fingers), not given a handjob\n"
         )
 
         # ── Random penis size injection ──
@@ -6732,6 +6737,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         _female_client_keywords = [
             "finger her", "fingering her", "finger me", "fingering me",
             "female client", "woman client", "her pussy", "my pussy",
+            "female customer", "woman customer", "lady client", "lady customer",
+            "female recipient", "woman recipient",
         ]
         _size_already_stated = [
             "inch", "inches", '"', "big", "huge", "massive", "small", "tiny",
@@ -6783,20 +6790,32 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             raw = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
             lines = raw.splitlines()
             if lines:
-                first = lines[0].strip().upper()
+                # Defensive: strip any "Line 1:" / "Line 2+:" labels the LLM might add
+                first = lines[0].strip()
+                import re as _re2
+                first = _re2.sub(r'^line\s*\d+[+:]?\s*', '', first, flags=_re2.IGNORECASE).strip().upper()
                 if first in ("NSFW", "SFW"):
                     is_nsfw = (first == "NSFW")
-                    prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'")
-                    if prompt_text and len(prompt_text) > 20:
-                        main_logger.info(f"[COMFYUI] LLM nsfw={is_nsfw} | prompt: {prompt_text}")
-                        return prompt_text, is_nsfw
+                    # Strip "Line 2+:" label from the start of the prompt body if present
+                    remaining = "\n".join(lines[1:]).strip().strip('"').strip("'")
+                    remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
+                    if remaining and len(remaining) > 20:
+                        main_logger.info(f"[COMFYUI] LLM nsfw={is_nsfw} | prompt: {remaining}")
+                        return remaining, is_nsfw
                 else:
-                    # LLM didn't follow format — treat entire output as prompt, infer nsfw from content
-                    if raw and len(raw) > 20:
+                    # LLM didn't follow format — scan for NSFW/SFW anywhere in first line
+                    first_raw = lines[0].strip().upper()
+                    if "NSFW" in first_raw:
+                        is_nsfw = True
+                    elif "SFW" in first_raw:
+                        is_nsfw = False
+                    else:
                         is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
-                        main_logger.warning(f"[COMFYUI] LLM skipped NSFW/SFW tag — inferred nsfw={is_nsfw}")
-                        main_logger.info(f"[COMFYUI] prompt: {raw}")
-                        return raw, is_nsfw
+                    prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'") or raw
+                    if prompt_text and len(prompt_text) > 20:
+                        main_logger.warning(f"[COMFYUI] LLM format deviation — inferred nsfw={is_nsfw}")
+                        main_logger.info(f"[COMFYUI] prompt: {prompt_text}")
+                        return prompt_text, is_nsfw
     except Exception as e:
         main_logger.warning(f"[COMFYUI] LLM prompt generation failed, using raw request: {e}")
 
@@ -8406,6 +8425,7 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         fingering_conv_triggers = [
             "fingering", "finger her", "finger me", "fingers her",
             "fingered", "female client", "woman client", "pussygrab",
+            "female customer", "woman customer", "lady client", "lady customer",
         ]
         if not any(kw in clean_desc.lower() for kw in fingering_conv_triggers):
             recent_msgs_fg = list(conversations.get(chat_id, []))[-15:]
