@@ -3940,7 +3940,14 @@ def _is_nsfw_context(text: str) -> bool:
     # Pass 2 — anatomy word near an exposure qualifier (handles "breasts exposed",
     # "nipple visible", "ass out", "chest uncovered", etc.)
     _anatomy = r'(breast|nipple|pussy|ass|butt|chest|cock|dick|penis|vagina)'
-    _qualifier = r'(exposed|bare|naked|nude|showing|visible|out|uncovered|open|reveal)'
+    # Include both past-participle/adjective forms (exposed, bare, showing, visible)
+    # AND active/gerund forms (exposing, baring, flashing) so phrases like
+    # "exposing a breast" and "flashing her nipple" trigger as well as "breast exposed"
+    _qualifier = (
+        r'(exposed|exposing|bare|baring|naked|nude|'
+        r'showing|showing off|visible|out|uncovered|open|'
+        r'reveal|revealing|revealed|flash|flashing|flashed)'
+    )
     # Match anatomy+qualifier or qualifier+anatomy within a short span
     if _re.search(rf'{_anatomy}\w*\s+\w*\s*{_qualifier}', text_lower):
         return True
