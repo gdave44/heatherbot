@@ -6635,6 +6635,10 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
             "- Do NOT add nudity if the scene says clothed/wearing\n"
             "- No preamble, no explanation, no quotes around the prompt\n"
+            "TERMINOLOGY GLOSSARY (interpret these correctly):\n"
+            "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
+            "- 'erotic massage' / 'happy ending' = a massage that concludes with the woman manually stimulating the man's penis\n"
+            "- 'fingering' = manual stimulation of female genitalia\n"
         )
 
         user_content = f"Scene: {anchor}"
