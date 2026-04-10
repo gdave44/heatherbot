@@ -6551,6 +6551,70 @@ def _clean_photo_request(request: str) -> str:
     text = re.sub(r'^(?:you\s+)?(?:in\s+|wearing\s+)', lambda m: m.group(0), text, flags=re.IGNORECASE)
     return text or request.strip()
 
+_STATUS_FALLBACKS = [
+    "give me a sec 😘📸",
+    "hold on... 😈",
+    "one minute 📸",
+]
+
+def _generate_photo_status(chat_id: int, user_request: str) -> str:
+    """Ask the LLM for a short in-character 'I'm taking the photo' message.
+
+    This is sent immediately while image generation runs, so it must be fast.
+    Falls back to a short generic line on any error.
+    """
+    try:
+        persona_name = personality.name
+        base_prompt = personality.get_system_prompt('chat')
+
+        if chat_id not in conversations:
+            load_conversation(chat_id)
+        history = list(conversations.get(chat_id, []))[-4:]
+        history_text = "\n".join(
+            f"{'User' if m['role'] == 'user' else persona_name}: {m['content'][:120]}"
+            for m in history
+        )
+
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            "The user just asked you to send a photo. You are about to take it. "
+            "Write ONE very short message (under 15 words) that you'd send while "
+            "getting ready — like a quick text acknowledging the request and building "
+            "anticipation. React to what was actually asked for. "
+            "No asterisk actions. 1 emoji max. Stay in character."
+        )
+
+        user_content = f"Photo request: {user_request}"
+        if history_text.strip():
+            user_content += f"\n\nRecent conversation:\n{history_text.strip()}"
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_content},
+                ],
+                "temperature": 0.9,
+                "max_tokens": 40,
+                "stream": False,
+            },
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            text = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if text and len(text) > 3:
+                main_logger.info(f"[STATUS] LLM status: {text}")
+                return text
+    except Exception as e:
+        main_logger.warning(f"[STATUS] LLM status failed, using fallback: {e}")
+
+    return random.choice(_STATUS_FALLBACKS)
+
+
 _CAPTION_FALLBACKS = [
     "Here you go 😘",
     "Just for you 😏",
@@ -8461,12 +8525,10 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         # Still acquire - will queue behind the current one
 
     async with image_generation_semaphore:
-        status_responses = [
-            "Ooh, you naughty thing... give me a minute 😈📸",
-            "Mmm, I like the way you think... hold on baby 🥵📸",
-            "Getting ready for you sweetie... 😘📸",
-        ]
-        status_msg = await bot.send_message(chat_id, random.choice(status_responses))
+        status_text = await loop.run_in_executor(
+            None, lambda: _generate_photo_status(chat_id, description)
+        )
+        status_msg = await bot.send_message(chat_id, status_text)
 
         try:
             loop = asyncio.get_running_loop()
