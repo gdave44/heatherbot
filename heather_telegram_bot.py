@@ -6715,6 +6715,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- No preamble, no explanation, no quotes around the prompt\n"
             "TERMINOLOGY GLOSSARY (interpret these correctly):\n"
             "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
+            "- Any phrase involving stroking, rubbing, pumping, gripping, or wrapping a hand around a cock/dick/penis = a handjob; describe it as manual penile stimulation, NOT a massage stroke\n"
+            "- In a massage context, 'stroking his dick/cock/penis' is sexual, not therapeutic — the therapist is masturbating the client\n"
             "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
             "- 'fingering' = one or more fingers inserted into or rubbing a woman's pussy/vagina — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
             "- A female customer/client does NOT have a penis or cock — NEVER assign male genitalia to a female character\n"
@@ -6973,6 +6975,12 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 "erotic massage", "sensual massage", "happy ending",
                 "hand job", "handjob", "stroking his", "stroking the",
                 "jerking", "jerk him", "jerk me",
+                "stroking his cock", "stroking his dick", "stroking his penis",
+                "stroking your", "rubbing his cock", "rubbing his dick",
+                "pumping his", "gripping his cock", "gripping his dick",
+                "wrap her hand", "wrapping her hand", "her hand on his cock",
+                "her hand around his", "grab his cock", "grabbing his cock",
+                "customer's dick", "customer's cock", "client's dick", "client's cock",
                 # marker appended by generate_and_send_image_async from conversation scan
                 "__handjob_lora__",
             ]
@@ -8413,6 +8421,10 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         handjob_conv_triggers = [
             "erotic massage", "sensual massage", "happy ending",
             "hand job", "handjob", "jerk", "stroking",
+            "rubbing his cock", "rubbing his dick", "pumping his",
+            "gripping his cock", "gripping his dick", "wrapping her hand",
+            "her hand on his cock", "her hand around his",
+            "customer's dick", "customer's cock", "client's dick", "client's cock",
         ]
         if not any(kw in clean_desc.lower() for kw in handjob_conv_triggers):
             recent_msgs_hj = list(conversations.get(chat_id, []))[-15:]
