@@ -7006,6 +7006,24 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
         face_name = ensure_face_image_uploaded() or os.path.basename(HEATHER_FACE_IMAGE)
         workflow[FACE_IMAGE_NODE]["inputs"]["image"] = face_name
 
+    # Multi-face targeting: find the ReActor node and set gender detection so
+    # it only swaps the female face when multiple faces appear in the image.
+    # ReActor parameters:
+    #   gender_detect_input: "Female" → only swap female faces in the target image
+    #   faces_index:         "0"      → swap the first detected female face
+    for _nid, _node in workflow.items():
+        _ct = _node.get("class_type", "")
+        if "reactor" in _ct.lower() or "ReActor" in _ct:
+            _inputs = _node.get("inputs", {})
+            # Only override if the parameter exists in the node (avoid adding unsupported keys)
+            if "gender_detect_input" in _inputs:
+                _inputs["gender_detect_input"] = "Female"
+                main_logger.debug(f"[COMFYUI] ReActor node {_nid}: gender_detect_input → Female")
+            if "faces_index" in _inputs:
+                _inputs["faces_index"] = "0"
+                main_logger.debug(f"[COMFYUI] ReActor node {_nid}: faces_index → 0")
+            break
+
     # Set FLUX guidance (replaces CFG for FLUX models)
     if "5" in workflow:
         workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
