@@ -7131,11 +7131,14 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 "fingered", "being fingered", "she fingers",
                 "female client", "woman client",
                 "female customer", "woman customer", "lady client", "lady customer",
-                # character self-masturbating
+                # character self-masturbating (herself = narration, yourself = user addressing her)
                 "masturbat", "touching herself", "fingering herself",
                 "playing with herself", "rubbing herself", "rubbing her pussy",
                 "touching her pussy", "fingers in her pussy", "fingers inside",
                 "pleasure herself", "pleasuring herself",
+                "touch yourself", "finger yourself", "play with yourself",
+                "rub yourself", "pleasure yourself", "touch your pussy",
+                "finger your pussy", "rub your pussy", "fingers in your pussy",
                 # conversation-scan marker
                 "__pussygrab_lora__",
             ]
@@ -8557,6 +8560,8 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             "female customer", "woman customer", "lady client", "lady customer",
             "masturbat", "touching herself", "fingering herself",
             "playing with herself", "rubbing herself", "rubbing her pussy",
+            "touch yourself", "finger yourself", "play with yourself",
+            "rub yourself", "touch your pussy", "finger your pussy", "rub your pussy",
         ]
         if not any(kw in clean_desc.lower() for kw in fingering_conv_triggers):
             recent_msgs_fg = list(conversations.get(chat_id, []))[-15:]
