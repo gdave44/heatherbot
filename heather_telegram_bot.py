@@ -6546,6 +6546,74 @@ def _clean_photo_request(request: str) -> str:
     text = re.sub(r'^(?:you\s+)?(?:in\s+|wearing\s+)', lambda m: m.group(0), text, flags=re.IGNORECASE)
     return text or request.strip()
 
+_CAPTION_FALLBACKS = [
+    "Here you go 😘",
+    "Just for you 😏",
+    "How's this? 😈",
+    "You asked for it 💋",
+]
+
+def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -> str:
+    """Ask the LLM to write a short in-character caption to send with the photo.
+
+    The caption should feel like a natural text the character would send alongside
+    a selfie — reacting to the specific request and conversation mood.
+    Falls back to a generic line on any error.
+    """
+    try:
+        persona_name = personality.name
+        base_prompt = personality.get_system_prompt('chat')
+
+        # Last few turns for mood context (no need for full history)
+        if chat_id not in conversations:
+            load_conversation(chat_id)
+        history = list(conversations.get(chat_id, []))[-6:]
+        history_text = "\n".join(
+            f"{'User' if m['role'] == 'user' else persona_name}: {m['content'][:150]}"
+            for m in history
+        )
+
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            "You just took and sent a photo that the user requested. "
+            "Write ONE short caption (1-2 sentences max) to send alongside it — "
+            "something you'd actually text, reacting naturally to what was asked for "
+            "and the mood of the conversation. "
+            "No asterisk actions. Use 1 emoji max. Stay in character. "
+            "Do NOT describe the photo — just react to sending it."
+        )
+
+        user_content = f"Photo I just sent: {user_request}"
+        if history_text.strip():
+            user_content += f"\n\nRecent conversation:\n{history_text.strip()}"
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_content},
+                ],
+                "temperature": 0.9,
+                "max_tokens": 60,
+                "stream": False,
+            },
+            timeout=15,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            caption = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if caption and len(caption) > 4:
+                main_logger.info(f"[CAPTION] LLM caption: {caption}")
+                return caption
+    except Exception as e:
+        main_logger.warning(f"[CAPTION] LLM caption failed, using fallback: {e}")
+
+    return random.choice(_CAPTION_FALLBACKS)
+
+
 def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
     """Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
 
@@ -8382,22 +8450,13 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
 
                 await status_msg.edit_text("📤 Sending...")
 
-                captions = [
-                    "Here you go 😘",
-                    "Just for you 🥵",
-                    "How's this? 😈",
-                    "You asked for it 😏",
-                    "Hope you like what you see 💕",
-                    "Don't say I never gave you anything 😘",
-                    "There you go 📸",
-                    "Enjoy 😈",
-                    "This what you had in mind? 😏",
-                    "Better than you imagined? 💋",
-                ]
+                caption = await loop.run_in_executor(
+                    None, lambda: _generate_photo_caption(chat_id, description, prebuilt_prompt)
+                )
 
                 image_file = io.BytesIO(image_data)
                 image_file.name = "heather_selfie.png"
-                await bot.send_photo(chat_id, image_file, caption=random.choice(captions))
+                await bot.send_photo(chat_id, image_file, caption=caption)
 
                 await status_msg.delete()
                 main_logger.info(f"Sent generated image to {chat_id}")
