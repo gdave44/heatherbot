@@ -6637,7 +6637,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- No preamble, no explanation, no quotes around the prompt\n"
             "TERMINOLOGY GLOSSARY (interpret these correctly):\n"
             "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
-            "- 'erotic massage' / 'happy ending' = a massage that concludes with the woman manually stimulating the man's penis\n"
+            "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
             "- 'fingering' = manual stimulation of female genitalia\n"
         )
 
