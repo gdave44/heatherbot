@@ -14,6 +14,7 @@ services:
     volumes:
       - ./heatherbot/data:/app/data
       - ./heatherbot/config:/app/config
+      - ./heatherbot/heather_telegram_bot.py:/app/heather_telegram_bot.py
     depends_on:
       - ollama
       - kokoro

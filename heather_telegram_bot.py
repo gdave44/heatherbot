@@ -6642,8 +6642,34 @@ def _compute_sha256(path: str) -> Optional[str]:
     except Exception:
         return None
 
+def _normalize_base_model(raw: str) -> str:
+    """Normalize a raw base model string to one of: flux, sdxl, pony, sd15, unknown.
+
+    Works on metadata values, Civitai baseModel strings, and filenames.
+    """
+    if not raw:
+        return "unknown"
+    s = raw.lower()
+    if "flux" in s:
+        return "flux"
+    if "pony" in s:
+        return "pony"
+    # SDXL: explicit tag, separator-prefixed xl, or bare xl at a word boundary/end of name
+    import re as _re
+    if ("sdxl" in s or "-xl" in s or "_xl" in s
+            or _re.search(r'xl[\-_\.]|xl$', s)):
+        return "sdxl"
+    # SD 1.x: explicit version strings, or filename suffixes like -sd, -sdblwjb, _sd15
+    if "sd 1" in s or "sd1" in s or "1.5" in s:
+        return "sd15"
+    # Filename suffix heuristic: ends with -sd<anything> or _sd<anything>
+    if _re.search(r'[-_]sd[a-z0-9]*\.(safetensors|pt|ckpt)$', s):
+        return "sd15"
+    return "unknown"
+
+
 def _civitai_lookup(sha256: str) -> dict:
-    """Query Civitai by SHA-256 hash. Returns dict with trigger_words, description, tags."""
+    """Query Civitai by SHA-256 hash. Returns dict with trigger_words, description, tags, base_model."""
     try:
         resp = requests.get(
             f"https://civitai.com/api/v1/model-versions/by-hash/{sha256}",
@@ -6652,14 +6678,21 @@ def _civitai_lookup(sha256: str) -> dict:
         )
         if resp.status_code == 200:
             data = resp.json()
+            raw_base = data.get("baseModel", "")
             return {
                 "trigger_words": data.get("trainedWords", []),
                 "description":   (data.get("description") or "")[:300],
                 "tags":          [t.get("name", "") for t in data.get("model", {}).get("tags", [])],
                 "nsfw":          data.get("model", {}).get("nsfw", False),
+                "base_model":    _normalize_base_model(raw_base),
+                "base_model_raw": raw_base,
             }
-    except Exception:
-        pass
+        elif resp.status_code == 404:
+            return {"_not_found": True}
+        else:
+            main_logger.warning(f"[LORA] Civitai lookup returned HTTP {resp.status_code}")
+    except Exception as e:
+        main_logger.warning(f"[LORA] Civitai lookup failed: {e}")
     return {}
 
 def _lora_file_path(filename: str) -> Optional[str]:
@@ -6719,15 +6752,32 @@ def build_lora_registry() -> None:
             except Exception:
                 pass
 
-        if entry.get("file_sig") == file_sig and entry.get("trigger_words") is not None:
+        if (entry.get("file_sig") == file_sig
+                and entry.get("trigger_words") is not None
+                and "base_model" in entry):
             continue   # cache is still valid
 
         main_logger.info(f"[LORA] Scanning: {filename}")
-        new_entry = {"file_sig": file_sig, "trigger_words": [], "description": "", "tags": [], "source": "unknown"}
+        new_entry = {
+            "file_sig": file_sig, "trigger_words": [], "description": "",
+            "tags": [], "source": "unknown", "base_model": "unknown", "base_model_raw": "",
+        }
 
         # 1. Safetensors header metadata (fast, offline)
         if path:
             meta = _read_safetensors_metadata(path)
+            # Detect base model from safetensors metadata keys
+            # kohya-ss training scripts write ss_base_model_version / modelspec.architecture
+            raw_base = (
+                meta.get("modelspec.architecture") or
+                meta.get("ss_base_model_version") or
+                meta.get("modelspec.title") or   # sometimes contains "flux" etc.
+                ""
+            )
+            if raw_base:
+                new_entry["base_model"] = _normalize_base_model(str(raw_base))
+                new_entry["base_model_raw"] = str(raw_base)[:80]
+
             # Common metadata keys for trigger words
             trigger_from_meta = (
                 meta.get("modelspec.trigger_phrase") or
@@ -6749,11 +6799,13 @@ def build_lora_registry() -> None:
             if meta.get("modelspec.description"):
                 new_entry["description"] = meta["modelspec.description"][:300]
 
-        # 2. Civitai lookup by SHA-256 (network, only if metadata didn't give trigger words)
-        if not new_entry["trigger_words"] and path:
+        # 2. Civitai lookup by SHA-256 (network — fills gaps metadata couldn't cover)
+        if (not new_entry["trigger_words"] or new_entry["base_model"] == "unknown") and path:
             sha = _compute_sha256(path)
             if sha:
                 civ = _civitai_lookup(sha)
+                if civ.get("_not_found"):
+                    main_logger.info(f"[LORA] {filename}: not found on Civitai (hash={sha[:12]}...)")
                 if civ.get("trigger_words"):
                     new_entry["trigger_words"] = civ["trigger_words"]
                     new_entry["source"] = "civitai"
@@ -6761,11 +6813,25 @@ def build_lora_registry() -> None:
                     new_entry["description"] = civ["description"]
                 if civ.get("tags"):
                     new_entry["tags"] = civ["tags"]
+                # Civitai base model overrides metadata only if metadata was unknown
+                if new_entry["base_model"] == "unknown" and civ.get("base_model"):
+                    new_entry["base_model"] = civ["base_model"]
+                    new_entry["base_model_raw"] = civ.get("base_model_raw", "")
+
+        # 3. Filename heuristic — last resort when metadata and Civitai both failed.
+        #    Many LoRAs embed the base model in their filename (e.g. BlowjobPony, sdblwjb).
+        if new_entry["base_model"] == "unknown":
+            inferred = _normalize_base_model(filename)
+            if inferred != "unknown":
+                new_entry["base_model"] = inferred
+                new_entry["base_model_raw"] = f"filename:{filename}"
+                main_logger.info(f"[LORA] {filename}: base model inferred from filename → {inferred}")
 
         LORA_REGISTRY[filename] = new_entry
         changed = True
         main_logger.info(
-            f"[LORA] {filename}: triggers={new_entry['trigger_words'][:2]} source={new_entry['source']}"
+            f"[LORA] {filename}: base={new_entry['base_model']} "
+            f"triggers={new_entry['trigger_words'][:2]} source={new_entry['source']}"
         )
 
     if changed:
@@ -6775,17 +6841,49 @@ def build_lora_registry() -> None:
 # Scene-specific LoRAs to skip in dynamic selection (always-on, handled separately)
 _ALWAYS_ON_LORAS = {"NSFW_master.safetensors", "flux-female-anatomy.safetensors"}
 
+# LoRA filenames that have been superseded or renamed — excluded from selection
+# even if the old file still exists on disk.
+_RETIRED_LORAS = {"Hand_job_POV.safetensors"}
+
+# Base models compatible with the active pipeline.
+# LoRAs classified as anything else are excluded from selection.
+_COMPATIBLE_BASE_MODELS = {"flux"}
+
+
+def _effective_base_model(fname: str, entry: dict) -> str:
+    """Return the best-known base model for a LoRA entry.
+
+    Filename heuristic takes priority when it returns a definitive answer —
+    names like 'BlowjobPony' or 'PerfectEyesXL' are unambiguous regardless
+    of what the registry cache says. Only falls back to the registry value
+    when the filename gives no signal.
+    """
+    fname_bm = _normalize_base_model(fname)
+    if fname_bm != "unknown":
+        return fname_bm
+    return entry.get("base_model", "unknown")
+
+
 def _select_loras_for_scene(scene_text: str, is_nsfw: bool) -> List[tuple]:
     """Ask the LLM which scene-specific LoRAs to inject for this image.
 
     Returns list of (filename, trigger_word) pairs in injection order.
     Falls back to keyword-based detection if LLM call fails.
     """
-    # Build menu of available scene-specific LoRAs from registry
-    candidates = {
-        fname: entry for fname, entry in LORA_REGISTRY.items()
-        if fname not in _ALWAYS_ON_LORAS and _lora_available(fname)
-    }
+    # Build menu of available scene-specific LoRAs from registry,
+    # excluding anything not compatible with the FLUX pipeline.
+    compatible, skipped = {}, []
+    for fname, entry in LORA_REGISTRY.items():
+        if fname in _ALWAYS_ON_LORAS or fname in _RETIRED_LORAS or not _lora_available(fname):
+            continue
+        bm = _effective_base_model(fname, entry)
+        if bm in _COMPATIBLE_BASE_MODELS or bm == "unknown":
+            compatible[fname] = entry
+        else:
+            skipped.append(f"{fname}({bm})")
+    if skipped:
+        main_logger.info(f"[LORA] Filtered incompatible LoRAs: {skipped}")
+    candidates = compatible
     if not candidates:
         return _select_loras_keyword_fallback(scene_text)
 
@@ -7040,17 +7138,28 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
 
         system_prompt = (
             f"{base_prompt}\n\n"
-            "The user just asked you to send a photo. You are about to take it. "
-            "Write ONE very short message (under 15 words) that you'd send while "
-            "getting ready — like a quick text acknowledging the request and building "
-            "anticipation. React to what was actually asked for. "
-            "No asterisk actions. 1 emoji max. Stay in character."
+            f"You ARE {persona_name}. You are TEXTING right now. Write in FIRST PERSON (I, me, my).\n"
+            "The user just asked you to send a photo. You are about to take it.\n"
+            "Write ONE very short message (under 15 words) — like a quick text "
+            "you'd send while getting ready, building anticipation.\n\n"
+            "RULES:\n"
+            f"- First person only: 'I', 'me', 'my' — NEVER say '{persona_name}' or refer to yourself by name\n"
+            "- NEVER write in third person\n"
+            "- NEVER narrate or describe what is happening\n"
+            "- No asterisk actions\n"
+            "- 1 emoji max\n\n"
+            "GOOD: 'give me a sec 😏'\n"
+            "GOOD: 'oh you want that? hang on...'\n"
+            f"BAD: '{persona_name} is getting ready to take the photo'\n"
+            "BAD: 'She grabbed her phone and started posing'"
             + _name_context_snippet(chat_id)
         )
 
-        user_content = f"Photo request: {user_request}"
+        # Use conversation history for context rather than passing the explicit request
+        # directly — avoids triggering safety refusals in the underlying model.
+        user_content = "Write your response now."
         if history_text.strip():
-            user_content += f"\n\nRecent conversation:\n{history_text.strip()}"
+            user_content = f"Recent conversation:\n{history_text.strip()}\n\nWrite your response now."
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -7069,10 +7178,25 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
 
         if response.status_code == 200:
             data = response.json()
-            text = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            if text and len(text) > 3:
+            raw_text = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            # Take only the first sentence/line — prevents the LLM from leaking
+            # chain-of-thought or meta-instructions into the status message.
+            first_line = raw_text.split('\n')[0].strip()
+            # Further truncate at the first sentence break after 60 chars
+            import re as _re_st
+            sentence_match = _re_st.search(r'[.!?]\s', first_line[30:]) if len(first_line) > 30 else None
+            text = first_line[:30 + sentence_match.start() + 1] if sentence_match else first_line
+            text = text.strip().strip('"').strip("'")
+            _refusal_signals = (
+                "i don't know how to", "as rebecca", "as luna", "as heather",
+                "i'm here to talk about", "i can't", "i cannot", "i'm not able",
+                "how can i assist", "how can i help", "i'm a language",
+            )
+            if text and len(text) > 3 and not any(s in text.lower() for s in _refusal_signals):
                 main_logger.info(f"[STATUS] LLM status: {text}")
                 return text
+            if text:
+                main_logger.warning(f"[STATUS] Discarded refusal response: {text[:80]}")
     except Exception as e:
         main_logger.warning(f"[STATUS] LLM status failed, using fallback: {e}")
 
@@ -7086,13 +7210,47 @@ _CAPTION_FALLBACKS = [
     "You asked for it 💋",
 ]
 
-def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -> str:
+# Used when the scene is NSFW — the LLM tends to break character for explicit content
+_NSFW_CAPTION_FALLBACKS = [
+    "just for you 😏",
+    "you're welcome 😈",
+    "hope that's what you had in mind 💋",
+    "took that one just for you",
+    "well... you did ask 😏",
+    "there you go 😘",
+    "how's that? 😈",
+    "don't say I never gave you anything 💋",
+]
+
+# Phrases that indicate the LLM broke character and refused instead of captioning
+_CAPTION_REFUSAL_SIGNALS = (
+    "i don't know how to",
+    "i'm not sure how to",
+    "that's quite a photo",
+    "as rebecca", "as luna", "as heather",
+    "i'm here to talk", "i'm here to help",
+    "let's focus on", "let's keep this",
+    "i can't", "i cannot", "i'm not able",
+    "how can i assist", "how can i help",
+    "that's outside", "i'm a language", "i am a language",
+    "massage session", "professional",
+)
+
+def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str, is_nsfw: bool = False) -> str:
     """Ask the LLM to write a short in-character caption to send with the photo.
 
     The caption should feel like a natural text the character would send alongside
     a selfie — reacting to the specific request and conversation mood.
     Falls back to a generic line on any error.
+    For NSFW scenes the LLM is skipped entirely (it breaks character for explicit content).
     """
+    # NSFW captions: skip LLM — it reliably breaks character for explicit content.
+    # Curated fallbacks are shorter and stay in character better.
+    if is_nsfw:
+        caption = random.choice(_NSFW_CAPTION_FALLBACKS)
+        main_logger.info(f"[CAPTION] NSFW — using curated caption: {caption}")
+        return caption
+
     try:
         persona_name = personality.name
         base_prompt = personality.get_system_prompt('chat')
@@ -7108,18 +7266,30 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -
 
         system_prompt = (
             f"{base_prompt}\n\n"
-            "You just took and sent a photo that the user requested. "
-            "Write ONE short caption (1-2 sentences max) to send alongside it — "
-            "something you'd actually text, reacting naturally to what was asked for "
-            + _name_context_snippet(chat_id) + " "
-            "and the mood of the conversation. "
-            "No asterisk actions. Use 1 emoji max. Stay in character. "
-            "Do NOT describe the photo — just react to sending it."
+            f"You ARE {persona_name}. You are TEXTING right now. Write in FIRST PERSON (I, me, my).\n"
+            "You just sent a photo the user asked for. Write ONE short text message "
+            "reacting to it — something you'd actually type and hit send.\n\n"
+            "RULES:\n"
+            f"- First person only: 'I', 'me', 'my' — NEVER say '{persona_name}' or refer to yourself by name\n"
+            "- NEVER write in third person\n"
+            "- NEVER narrate or describe what Rebecca/the character did\n"
+            "- Do NOT describe what is in the photo\n"
+            "- No asterisk actions\n"
+            "- 1 emoji max\n"
+            "- 1-2 sentences max\n\n"
+            "GOOD: 'hope that's what you had in mind 😏'\n"
+            "GOOD: 'took that one just for you'\n"
+            f"BAD: '{persona_name} just sent David the photo he requested'\n"
+            "BAD: 'She is shown in her massage studio wearing her white spa uniform'"
+            + _name_context_snippet(chat_id)
         )
 
-        user_content = f"Photo I just sent: {user_request}"
+        # Do NOT pass the explicit scene description to the caption LLM — it can trigger
+        # safety refusals in the underlying model. The conversation history provides all
+        # the mood context needed for the character to react naturally.
+        user_content = "Write your caption now."
         if history_text.strip():
-            user_content += f"\n\nRecent conversation:\n{history_text.strip()}"
+            user_content = f"Recent conversation:\n{history_text.strip()}\n\nWrite your caption now."
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -7130,7 +7300,7 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -
                     {"role": "user",   "content": user_content},
                 ],
                 "temperature": 0.9,
-                "max_tokens": 60,
+                "max_tokens": 45,
                 "stream": False,
             },
             timeout=15,
@@ -7139,9 +7309,11 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str) -
         if response.status_code == 200:
             data = response.json()
             caption = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            if caption and len(caption) > 4:
+            if caption and len(caption) > 4 and not any(s in caption.lower() for s in _CAPTION_REFUSAL_SIGNALS):
                 main_logger.info(f"[CAPTION] LLM caption: {caption}")
                 return caption
+            if caption:
+                main_logger.warning(f"[CAPTION] Discarded refusal response: {caption[:80]}")
     except Exception as e:
         main_logger.warning(f"[CAPTION] LLM caption failed, using fallback: {e}")
 
@@ -7243,6 +7415,16 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             f"- If the scene mentions a customer, client, or patient → set the scene at {work_setting}\n"
             "- If the scene only mentions a man, woman, guy, girl, or him/her with no role → setting can be any of her typical locations\n"
             "- If the scene explicitly states a location → always use that location\n\n"
+            "SFW/NSFW DEFAULT RULES — apply these when the request is ambiguous:\n"
+            "- Massage, massage table, yoga, hiking, working out, cooking, driving, "
+            "studio, outdoors, selfie, outfit — default SFW unless the conversation "
+            "or request explicitly escalates to sexual content\n"
+            "- A request to 'show me on the massage table' or 'picture at work' is SFW "
+            "by default — a professional or personal photo, not an explicit one\n"
+            "- Only classify NSFW if the request or recent conversation EXPLICITLY mentions "
+            "sexual acts, nudity, genitals, or erotic touch. Do not infer sexual intent "
+            "from the occupation alone\n"
+            "- When in doubt: SFW\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
             "- Weave the character's physical description naturally into the scene\n"
@@ -7520,6 +7702,16 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
             dyn_node_id = 22
             for lora_file, trigger_word in scene_loras:
                 if not _lora_available(lora_file):
+                    continue
+                # Hard gate: block retired or incompatible LoRAs at injection time.
+                if lora_file in _RETIRED_LORAS:
+                    main_logger.warning(f"[LORA] Blocked retired LoRA at injection: {lora_file}")
+                    continue
+                _inj_bm = _effective_base_model(lora_file, LORA_REGISTRY.get(lora_file, {}))
+                if _inj_bm not in _COMPATIBLE_BASE_MODELS and _inj_bm != "unknown":
+                    main_logger.warning(
+                        f"[LORA] Blocked incompatible LoRA at injection: {lora_file} (base={_inj_bm})"
+                    )
                     continue
                 node_key = str(dyn_node_id)
                 workflow[node_key] = {
@@ -8992,7 +9184,7 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                 await status_msg.edit_text("📤 Sending...")
 
                 caption = await loop.run_in_executor(
-                    None, lambda: _generate_photo_caption(chat_id, description, prebuilt_prompt)
+                    None, lambda: _generate_photo_caption(chat_id, description, prebuilt_prompt, is_nsfw=is_nsfw)
                 )
 
                 image_file = io.BytesIO(image_data)
