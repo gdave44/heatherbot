@@ -39,7 +39,7 @@
   },
   "4": {
     "inputs": {
-      "text": "",
+      "text": "worst quality, low quality, blurry, out of focus, jpeg artifacts, compression artifacts, grainy, noisy, watermark, text, logo, signature, username, caption, deformed, disfigured, mutated, extra limbs, extra arms, extra legs, extra hands, extra fingers, missing fingers, fused fingers, bad anatomy, bad proportions, malformed hands, malformed limbs, cloned face, duplicate face, extra faces, cross-eyed, asymmetric eyes, cartoon, anime, illustration, painting, drawing, render, 3d, cgi, plastic skin, airbrushed, overexposed, underexposed, oversaturated",
       "clip": [
         "1",
         1
@@ -47,7 +47,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Negative Prompt (empty for FLUX)"
+      "title": "Negative Prompt"
     }
   },
   "5": {
