@@ -568,13 +568,9 @@ IMAGE_AI_ENDPOINT = IMG_URL
 TTS_ENDPOINT = TTS_URL
 COMFYUI_ENDPOINT = COMFYUI_URL
 
-# ComfyUI settings — FLUX.1 dev pipeline
+# ComfyUI settings — node IDs are set below after workflow loading
 WORKFLOW_FILE = os.getenv("COMFYUI_WORKFLOW_FILE", os.path.join(CONFIG_DIR, "workflow_flux.json"))
 FACE_WORKFLOW_FILE = os.getenv("COMFYUI_FACE_WORKFLOW_FILE", os.path.join(CONFIG_DIR, "workflow_face.json"))
-POSITIVE_PROMPT_NODE = "3"
-NEGATIVE_PROMPT_NODE = "4"
-FACE_IMAGE_NODE = "10"
-FINAL_OUTPUT_NODE = "9"  # Save FINAL (Face Swapped + Blended)
 HEATHER_FACE_IMAGE = os.getenv("COMFYUI_FACE_IMAGE", os.path.join(CONFIG_DIR, "heather_face.png"))
 FLUX_GUIDANCE = 5.0
 COMFYUI_LORAS_DIR = os.getenv("COMFYUI_LORAS_DIR", "/app/ComfyUI/models/loras")
@@ -5660,35 +5656,40 @@ def generate_face_reference() -> bool:
         # Use the dedicated face workflow as-is — just inject the prompt and randomize seeds
         main_logger.info(f"[FACE-GEN] Using dedicated face workflow: {FACE_WORKFLOW_FILE}")
         workflow = json.loads(json.dumps(FACE_WORKFLOW))
-        if POSITIVE_PROMPT_NODE in workflow:
-            workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+        _face_pos_node = _FACE_WF_META.get("positive_prompt_node", POSITIVE_PROMPT_NODE)
+        _face_guidance_node = _FACE_WF_META.get("guidance_node", _WF_GUIDANCE_NODE)
+        if _face_pos_node in workflow:
+            workflow[_face_pos_node]["inputs"]["text"] = full_prompt
         for nid, node in workflow.items():
             inputs = node.get("inputs", {})
             if "seed" in inputs:
                 inputs["seed"] = random.randint(0, 2**53 - 1)
-        if "5" in workflow:
-            workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+        if _face_guidance_node and _face_guidance_node in workflow:
+            workflow[_face_guidance_node]["inputs"]["guidance"] = FLUX_GUIDANCE
     else:
         # Fallback: derive from main workflow by stripping face swap + LoRA nodes
         main_logger.info("[FACE-GEN] Deriving face workflow from main workflow (create workflow_face.json to avoid this)")
         workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
         if POSITIVE_PROMPT_NODE in workflow:
             workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-        for nid in ["7", "14"]:
+        for nid in _WF_SAMPLER_NODES:
             if nid in workflow and "seed" in workflow[nid].get("inputs", {}):
                 workflow[nid]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
-        if "5" in workflow:
-            workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+        if _WF_GUIDANCE_NODE and _WF_GUIDANCE_NODE in workflow:
+            workflow[_WF_GUIDANCE_NODE]["inputs"]["guidance"] = FLUX_GUIDANCE
         # Route output past face swap nodes
-        if "9" in workflow:
-            workflow["9"]["inputs"]["images"] = ["8", 0]
-        for nid in ["10", "11", "13", "14", "15", "20", "21", "22", "23", "24"]:
+        if FINAL_OUTPUT_NODE in workflow:
+            workflow[FINAL_OUTPUT_NODE]["inputs"]["images"] = [_WF_VAE_DECODE_NODE, 0]
+        # Remove face swap nodes and any LoRA loader nodes
+        for nid in _WF_FACE_SWAP_NODES:
             if nid in workflow:
                 del workflow[nid]
+        for nid in [k for k, v in list(workflow.items()) if v.get("class_type") == "LoraLoader"]:
+            del workflow[nid]
         # Portrait framing: square crop
-        if "6" in workflow:
-            workflow["6"]["inputs"]["width"] = 768
-            workflow["6"]["inputs"]["height"] = 768
+        if _WF_LATENT_NODE in workflow:
+            workflow[_WF_LATENT_NODE]["inputs"]["width"] = 768
+            workflow[_WF_LATENT_NODE]["inputs"]["height"] = 768
 
     try:
         prompt_id = queue_comfyui_prompt(workflow)
@@ -6571,20 +6572,50 @@ React in 1-2 SHORT sentences like a text message:
 # COMFYUI IMAGE GENERATION
 # ============================================================================
 
-def load_comfyui_workflow(filepath: str) -> dict:
+def load_comfyui_workflow(filepath: str):
+    """Load a ComfyUI workflow JSON and extract its _workflow_meta block.
+
+    Returns (workflow_dict, meta_dict). On failure returns (None, {}).
+    The _workflow_meta key is removed from the workflow dict so ComfyUI
+    never sees it.
+    """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        meta = data.pop("_workflow_meta", {})
+        return data, meta
     except Exception:
-        return None
+        return None, {}
 
-COMFYUI_WORKFLOW = load_comfyui_workflow(WORKFLOW_FILE)
+COMFYUI_WORKFLOW, _WF_META = load_comfyui_workflow(WORKFLOW_FILE)
 if COMFYUI_WORKFLOW:
     main_logger.info(f"[COMFYUI] Workflow loaded: {WORKFLOW_FILE}")
+    if _WF_META:
+        main_logger.info(f"[COMFYUI] Workflow meta: base_model={_WF_META.get('base_model','?')} "
+                         f"compatible_loras={_WF_META.get('compatible_lora_bases','?')}")
 else:
     main_logger.warning(f"[COMFYUI] Workflow NOT found: {WORKFLOW_FILE}")
+    _WF_META = {}
 
-FACE_WORKFLOW = load_comfyui_workflow(FACE_WORKFLOW_FILE)
+# Node IDs — derived from workflow meta with FLUX-safe defaults.
+# Override these in your workflow JSON under the "_workflow_meta" key.
+POSITIVE_PROMPT_NODE    = _WF_META.get("positive_prompt_node", "3")
+NEGATIVE_PROMPT_NODE    = _WF_META.get("negative_prompt_node", "4")
+FACE_IMAGE_NODE         = _WF_META.get("face_image_node", "10")
+FINAL_OUTPUT_NODE       = _WF_META.get("final_output_node", "9")
+_WF_GUIDANCE_NODE       = _WF_META.get("guidance_node", "5")   # None → skip FluxGuidance
+_WF_SAMPLER_NODES       = _WF_META.get("sampler_nodes", ["7", "14"])
+_WF_SAMPLER_NODE        = _WF_META.get("sampler_node", "7")
+_WF_CHECKPOINT_NODE     = _WF_META.get("checkpoint_node", "1")
+_WF_LORA_START          = _WF_META.get("lora_inject_start", 20)
+_WF_LATENT_NODE         = _WF_META.get("latent_node", "6")
+_WF_VAE_DECODE_NODE     = _WF_META.get("vae_decode_node", "8")
+_WF_FACE_SWAP_NODES     = _WF_META.get("face_swap_nodes", ["10", "11", "13", "14", "15"])
+# For ControlNet positive input: use guidance node if present, else positive prompt node
+_WF_CONTROLNET_POS_NODE = _WF_META.get("controlnet_positive_node",
+                                        _WF_GUIDANCE_NODE if _WF_GUIDANCE_NODE else POSITIVE_PROMPT_NODE)
+
+FACE_WORKFLOW, _FACE_WF_META = load_comfyui_workflow(FACE_WORKFLOW_FILE)
 if FACE_WORKFLOW:
     main_logger.info(f"[COMFYUI] Face workflow loaded: {FACE_WORKFLOW_FILE}")
 else:
@@ -6864,9 +6895,9 @@ _ALWAYS_ON_LORAS: set = set()
 # even if the old file still exists on disk.
 _RETIRED_LORAS = {"Hand_job_POV.safetensors"}
 
-# Base models compatible with the active pipeline.
-# LoRAs classified as anything else are excluded from selection.
-_COMPATIBLE_BASE_MODELS = {"flux"}
+# Base models compatible with the active pipeline — derived from workflow meta.
+# Override via "_workflow_meta": {"compatible_lora_bases": ["flux"]} in your workflow JSON.
+_COMPATIBLE_BASE_MODELS = set(_WF_META.get("compatible_lora_bases", ["flux"]))
 
 
 def _effective_base_model(fname: str, entry: dict) -> str:
@@ -7634,8 +7665,8 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     if BREADCRUMB_LOGGING:
         main_logger.info(f"[COMFYUI] nsfw={is_nsfw} | prompt → {full_prompt}")
 
-    # Randomize seeds (FLUX workflow: node 7 = main KSampler, node 14 = face blend KSampler)
-    for node_id in ["7", "14"]:
+    # Randomize seeds in all sampler nodes defined in workflow meta
+    for node_id in _WF_SAMPLER_NODES:
         if node_id in workflow and "seed" in workflow[node_id].get("inputs", {}):
             workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
 
@@ -7672,9 +7703,9 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                 main_logger.debug(f"[COMFYUI] ReActor node {_nid}: faces_index → 0")
             break
 
-    # Set FLUX guidance (replaces CFG for FLUX models)
-    if "5" in workflow:
-        workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+    # Set guidance value (FLUX models use a dedicated FluxGuidance node; others use KSampler cfg)
+    if _WF_GUIDANCE_NODE and _WF_GUIDANCE_NODE in workflow:
+        workflow[_WF_GUIDANCE_NODE]["inputs"]["guidance"] = FLUX_GUIDANCE
 
     # LoRA injection — fully LLM-driven for both SFW and NSFW.
     # No LoRAs are baked in; the LLM selects all of them (including NSFW base LoRAs)
@@ -7683,9 +7714,9 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     scene_loras = _select_loras_for_scene(_lora_scan, is_nsfw)
 
     if scene_loras:
-        last_model_node = "1"  # checkpoint model output
-        last_clip_node = "1"   # checkpoint clip output
-        dyn_node_id = 20
+        last_model_node = _WF_CHECKPOINT_NODE  # checkpoint model output
+        last_clip_node = _WF_CHECKPOINT_NODE   # checkpoint clip output
+        dyn_node_id = _WF_LORA_START
         for lora_file, trigger_word in scene_loras:
             if not _lora_available(lora_file):
                 continue
@@ -7720,10 +7751,10 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
             main_logger.info(f"[LORA] Injected: {lora_file} | trigger: {trigger_word}")
             dyn_node_id += 1
 
-        workflow["7"]["inputs"]["model"] = [last_model_node, 0]
-        workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
-        workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
-        main_logger.info(f"[LORA] {dyn_node_id - 20} LoRA(s) injected")
+        workflow[_WF_SAMPLER_NODE]["inputs"]["model"] = [last_model_node, 0]
+        workflow[POSITIVE_PROMPT_NODE]["inputs"]["clip"] = [last_clip_node, 1]
+        workflow[NEGATIVE_PROMPT_NODE]["inputs"]["clip"] = [last_clip_node, 1]
+        main_logger.info(f"[LORA] {dyn_node_id - _WF_LORA_START} LoRA(s) injected")
     else:
         main_logger.info("[LORA] No LoRAs selected — running base model clean")
 
@@ -7739,9 +7770,9 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
 
         # Swap to landscape dimensions for wide poses
         if pose_config.get("landscape"):
-            if "6" in workflow:
-                workflow["6"]["inputs"]["width"] = 1344
-                workflow["6"]["inputs"]["height"] = 768
+            if _WF_LATENT_NODE in workflow:
+                workflow[_WF_LATENT_NODE]["inputs"]["width"] = 1344
+                workflow[_WF_LATENT_NODE]["inputs"]["height"] = 768
 
         # Only inject ControlNet for poses that benefit from it
         if pose_config.get("use_controlnet"):
@@ -7760,26 +7791,26 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
                     "strength": CONTROLNET_STRENGTH,
                     "start_percent": 0.0,
                     "end_percent": CONTROLNET_END,
-                    "positive": ["5", 0],
-                    "negative": ["4", 0],
+                    "positive": [_WF_CONTROLNET_POS_NODE, 0],
+                    "negative": [NEGATIVE_PROMPT_NODE, 0],
                     "control_net": ["51", 0],
-                    "vae": ["1", 2],
+                    "vae": [_WF_CHECKPOINT_NODE, 2],
                     "image": ["50", 0],
                 },
                 "class_type": "ControlNetApplySD3",
                 "_meta": {"title": "ControlNet Apply (Pose)"}
             }
             # Rewire KSampler to use ControlNet conditioning
-            workflow["7"]["inputs"]["positive"] = ["52", 0]
-            workflow["7"]["inputs"]["negative"] = ["52", 1]
+            workflow[_WF_SAMPLER_NODE]["inputs"]["positive"] = ["52", 0]
+            workflow[_WF_SAMPLER_NODE]["inputs"]["negative"] = ["52", 1]
             main_logger.info(f"ControlNet pose injected: {pose_id} (strength={CONTROLNET_STRENGTH})")
         else:
             main_logger.info(f"Pose {pose_id} using prompt-only (no ControlNet)")
 
         # Skip face swap for back-facing poses (ReActor pastes face on back of head)
         if pose_config.get("skip_face_swap"):
-            workflow["9"]["inputs"]["images"] = ["8", 0]
-            for nid in ["10", "11", "13", "14", "15"]:
+            workflow[FINAL_OUTPUT_NODE]["inputs"]["images"] = [_WF_VAE_DECODE_NODE, 0]
+            for nid in _WF_FACE_SWAP_NODES:
                 if nid in workflow:
                     del workflow[nid]
             main_logger.info(f"Face swap skipped for {pose_id}")
