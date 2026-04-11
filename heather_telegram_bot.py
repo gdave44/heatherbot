@@ -9656,6 +9656,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await generate_and_send_image_async(context.bot, chat_id, description)
                 return
             else:
+                _reason = ("ComfyUI offline" if not is_online
+                           else "face image missing" if not check_heather_face()
+                           else "workflow not loaded")
+                main_logger.warning(f"[{request_id}] Specific image blocked — {_reason} | chat={chat_id}")
                 await context.bot.send_message(chat_id,"Fuck baby, my camera's not working right now... 😘")
                 return
 
@@ -9696,9 +9700,13 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 store_message(chat_id, "Heather", response)
             return
         else:
+            _reason = ("ComfyUI offline" if not is_online
+                       else "face image missing" if not check_heather_face()
+                       else "workflow not loaded")
+            main_logger.warning(f"[{request_id}] Generic image blocked — {_reason} | chat={chat_id}")
             await context.bot.send_message(chat_id,"Fuck baby, my camera's not working right now... 😘")
             return
-    
+
     # Check for photo AI accusations first (filter admission, not flat denial)
     if personality.is_photo_ai_accusation(user_message):
         response = personality.get_photo_ai_response()
