@@ -7539,9 +7539,9 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
             "or any erotic physical contact with genitals. Otherwise SFW.\n"
             "- Remaining lines: the FLUX prompt (comma-separated phrases, 50-80 words)\n"
-            "EXAMPLE — do it exactly like this:\n"
+            "EXAMPLE — do it exactly like this (scene/action FIRST, character details after):\n"
             "NSFW\n"
-            "33-year-old woman, long brunette hair, brown eyes, massage table, close-up of therapist fingering female client's pussy, ...\n\n"
+            "massage table, close-up of therapist fingering female client's pussy, 33-year-old woman, long brunette hair, brown eyes, ...\n\n"
             "SETTING INFERENCE RULES (apply when the scene doesn't state a location):\n"
             f"- If the scene mentions a customer, client, or patient → set the scene at {work_setting}\n"
             "- If the scene only mentions a man, woman, guy, girl, or him/her with no role → setting can be any of her typical locations\n"
@@ -7559,8 +7559,11 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- When in doubt: SFW\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
-            "- Weave the character's physical description naturally into the scene\n"
-            "- Always include: pose, setting/location, expression, camera angle, lighting\n"
+            "- ORDER MATTERS: start with the scene/action/setting from the Scene request, "
+            "then weave in character physical details — NEVER lead with character description\n"
+            "- The Scene request is the PRIMARY requirement — every specific detail in it MUST "
+            "appear in the prompt. Character description is secondary and can be abbreviated.\n"
+            "- Always include: exact action/pose from scene, setting/location, expression, camera angle, lighting\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
@@ -7638,7 +7641,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 160,
+                "max_tokens": 220,
                 "stream": False,
             },
             timeout=20,
