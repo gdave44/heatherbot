@@ -6611,6 +6611,9 @@ _WF_LORA_START          = _WF_META.get("lora_inject_start", 20)
 _WF_LATENT_NODE         = _WF_META.get("latent_node", "6")
 _WF_VAE_DECODE_NODE     = _WF_META.get("vae_decode_node", "8")
 _WF_FACE_SWAP_NODES     = _WF_META.get("face_swap_nodes", ["10", "11", "13", "14", "15"])
+# Extra [node_id, input_key] pairs whose model input should be rewired after LoRA injection.
+# Needed for workflows where multiple nodes (e.g. CFGGuider, BasicScheduler) reference the model.
+_WF_MODEL_REWIRE_NODES  = _WF_META.get("model_rewire_nodes", [])
 # For ControlNet positive input: use guidance node if present, else positive prompt node
 _WF_CONTROLNET_POS_NODE = _WF_META.get("controlnet_positive_node",
                                         _WF_GUIDANCE_NODE if _WF_GUIDANCE_NODE else POSITIVE_PROMPT_NODE)
@@ -7667,10 +7670,16 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     if BREADCRUMB_LOGGING:
         main_logger.info(f"[COMFYUI] nsfw={is_nsfw} | prompt → {full_prompt}")
 
-    # Randomize seeds in all sampler nodes defined in workflow meta
-    for node_id in _WF_SAMPLER_NODES:
-        if node_id in workflow and "seed" in workflow[node_id].get("inputs", {}):
-            workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+    # Randomize all literal integer seeds in the workflow.
+    # Checks isinstance(seed, int) to avoid overwriting node-reference seeds like ["5", 0].
+    for _nid, _node in workflow.items():
+        _seed_val = _node.get("inputs", {}).get("seed")
+        if isinstance(_seed_val, int):
+            _node["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+        # Some nodes use noise_seed instead of seed (e.g. RandomNoise)
+        _noise_val = _node.get("inputs", {}).get("noise_seed")
+        if isinstance(_noise_val, int):
+            _node["inputs"]["noise_seed"] = random.randint(0, 2**53 - 1)
 
     # Set positive prompt
     if POSITIVE_PROMPT_NODE in workflow:
@@ -7755,7 +7764,14 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
 
         workflow[_WF_SAMPLER_NODE]["inputs"]["model"] = [last_model_node, 0]
         workflow[POSITIVE_PROMPT_NODE]["inputs"]["clip"] = [last_clip_node, 1]
-        workflow[NEGATIVE_PROMPT_NODE]["inputs"]["clip"] = [last_clip_node, 1]
+        # Guard: negative node may not have a clip input (e.g. ConditioningZeroOut)
+        _neg_node_inputs = workflow.get(NEGATIVE_PROMPT_NODE, {}).get("inputs", {})
+        if "clip" in _neg_node_inputs:
+            _neg_node_inputs["clip"] = [last_clip_node, 1]
+        # Rewire any additional model-dependent nodes declared in workflow meta
+        for _rewire_nid, _rewire_key in _WF_MODEL_REWIRE_NODES:
+            if _rewire_nid in workflow and _rewire_key in workflow[_rewire_nid].get("inputs", {}):
+                workflow[_rewire_nid]["inputs"][_rewire_key] = [last_model_node, 0]
         main_logger.info(f"[LORA] {dyn_node_id - _WF_LORA_START} LoRA(s) injected")
     else:
         main_logger.info("[LORA] No LoRAs selected — running base model clean")
