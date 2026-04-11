@@ -1,0 +1,27 @@
+# =============================================================================
+# Local LoRA metadata overrides
+# =============================================================================
+# Use this file to set or correct trigger words, descriptions, tags, and base
+# model for LoRAs that Civitai doesn't know about or returns wrong data for.
+#
+# Any field you set here takes priority over Civitai and safetensors metadata.
+# Only set fields you want to override — omitted fields use auto-detected values.
+#
+# Fields:
+#   trigger_words: list of strings to prepend to the positive prompt
+#   description:   plain-text description for the LLM selection menu
+#   tags:          list of content tags (used in LLM menu, e.g. ["nsfw", "fingering"])
+#   base_model:    flux | sdxl | sd15 | pony | unknown
+#
+# Example:
+#
+# Fingering.safetensors:
+#   trigger_words: ["fingering"]
+#   description: "Realistic fingering scenes, close-up anatomy detail"
+#   tags: ["nsfw", "fingering", "explicit"]
+#   base_model: flux
+#
+# MyCustomLora.safetensors:
+#   description: "Intimate close-up scenes with natural lighting"
+#   tags: ["nsfw", "closeup"]
+# =============================================================================

@@ -6720,6 +6720,13 @@ def _normalize_base_model(raw: str) -> str:
     return "unknown"
 
 
+def _strip_html(text: str) -> str:
+    """Remove HTML tags and decode common entities from a string."""
+    import re as _reh, html as _html
+    text = _reh.sub(r'<[^>]+>', ' ', text)
+    text = _html.unescape(text)
+    return ' '.join(text.split())
+
 def _civitai_lookup(sha256: str) -> dict:
     """Query Civitai by SHA-256 hash. Returns dict with trigger_words, description, tags, base_model."""
     try:
@@ -6731,9 +6738,13 @@ def _civitai_lookup(sha256: str) -> dict:
         if resp.status_code == 200:
             data = resp.json()
             raw_base = data.get("baseModel", "")
+            raw_desc = _strip_html(data.get("description") or "")
+            # Also pull the model-level description if version description is empty
+            if not raw_desc:
+                raw_desc = _strip_html(data.get("model", {}).get("description") or "")
             return {
                 "trigger_words": data.get("trainedWords", []),
-                "description":   (data.get("description") or "")[:300],
+                "description":   raw_desc[:300],
                 "tags":          [t.get("name", "") for t in data.get("model", {}).get("tags", [])],
                 "nsfw":          data.get("model", {}).get("nsfw", False),
                 "base_model":    _normalize_base_model(raw_base),
@@ -6769,12 +6780,42 @@ def _save_lora_registry() -> None:
     except Exception as e:
         main_logger.warning(f"[LORA] Could not save registry: {e}")
 
+def _load_lora_overrides() -> dict:
+    """Load local LoRA metadata overrides from config/lora_info.yaml.
+
+    Returns dict mapping filename → {trigger_words, description, tags, base_model}.
+    Any field present overrides the Civitai/metadata value for that LoRA.
+
+    Example lora_info.yaml:
+      Fingering.safetensors:
+        trigger_words: ["fingering"]
+        description: "Realistic fingering scenes for FLUX"
+        base_model: flux
+      MyCustomLora.safetensors:
+        description: "Close-up intimate scenes"
+        tags: ["nsfw", "closeup"]
+    """
+    path = os.path.join(CONFIG_DIR, "lora_info.yaml")
+    if not os.path.exists(path):
+        return {}
+    try:
+        import yaml as _yaml
+        with open(path, 'r') as f:
+            data = _yaml.safe_load(f) or {}
+        main_logger.info(f"[LORA] Loaded local overrides for {len(data)} LoRA(s) from lora_info.yaml")
+        return data
+    except Exception as e:
+        main_logger.warning(f"[LORA] Could not load lora_info.yaml: {e}")
+        return {}
+
 def build_lora_registry() -> None:
     """Scan available LoRAs, read safetensors metadata, query Civitai, cache to disk.
 
     Runs in a background thread at startup. Results stored in LORA_REGISTRY.
     """
     global LORA_REGISTRY
+
+    lora_overrides = _load_lora_overrides()
 
     # Load existing cache
     if os.path.exists(LORA_REGISTRY_PATH):
@@ -6806,13 +6847,15 @@ def build_lora_registry() -> None:
 
         if (entry.get("file_sig") == file_sig
                 and entry.get("trigger_words") is not None
-                and "base_model" in entry):
+                and "base_model" in entry
+                and entry.get("_cache_v") == 2):  # bump version to force re-scan when format changes
             continue   # cache is still valid
 
         main_logger.info(f"[LORA] Scanning: {filename}")
         new_entry = {
             "file_sig": file_sig, "trigger_words": [], "description": "",
             "tags": [], "source": "unknown", "base_model": "unknown", "base_model_raw": "",
+            "_cache_v": 2,
         }
 
         # 1. Safetensors header metadata (fast, offline)
@@ -6837,14 +6880,18 @@ def build_lora_registry() -> None:
                 meta.get("ss_tag_frequency")        # dict of tag:count — take top keys
             )
             if isinstance(trigger_from_meta, dict):
-                # ss_tag_frequency: {dataset: {tag: count}} — flatten and sort
+                # ss_tag_frequency: {dataset: {tag: count}} — flatten and sort by count.
+                # Only treat as trigger words if there are few unique tags; large tag sets
+                # are booru training dumps, not real trigger words.
                 all_tags = {}
                 for ds_tags in trigger_from_meta.values():
                     if isinstance(ds_tags, dict):
                         all_tags.update(ds_tags)
-                sorted_tags = sorted(all_tags, key=lambda t: all_tags[t], reverse=True)
-                new_entry["trigger_words"] = sorted_tags[:10]
-                new_entry["source"] = "metadata"
+                if len(all_tags) <= 20:
+                    sorted_tags = sorted(all_tags, key=lambda t: all_tags[t], reverse=True)
+                    new_entry["trigger_words"] = sorted_tags[:5]
+                    new_entry["source"] = "metadata"
+                # else: too many tags — skip, let Civitai fill this
             elif isinstance(trigger_from_meta, str) and trigger_from_meta.strip():
                 new_entry["trigger_words"] = [t.strip() for t in trigger_from_meta.split(",") if t.strip()]
                 new_entry["source"] = "metadata"
@@ -6878,6 +6925,19 @@ def build_lora_registry() -> None:
                 new_entry["base_model"] = inferred
                 new_entry["base_model_raw"] = f"filename:{filename}"
                 main_logger.info(f"[LORA] {filename}: base model inferred from filename → {inferred}")
+
+        # 4. Local overrides (lora_info.yaml) — highest priority, applied last.
+        override = lora_overrides.get(filename, {})
+        if override:
+            if "trigger_words" in override:
+                new_entry["trigger_words"] = override["trigger_words"]
+            if "description" in override:
+                new_entry["description"] = override["description"]
+            if "tags" in override:
+                new_entry["tags"] = override["tags"]
+            if "base_model" in override:
+                new_entry["base_model"] = _normalize_base_model(str(override["base_model"]))
+            new_entry["source"] = "override"
 
         LORA_REGISTRY[filename] = new_entry
         changed = True
@@ -6944,8 +7004,15 @@ def _select_loras_for_scene(scene_text: str, is_nsfw: bool) -> List[tuple]:
     for fname, entry in candidates.items():
         triggers = entry.get("trigger_words", [])
         desc = entry.get("description", "")
-        trigger_str = ", ".join(f'"{t}"' for t in triggers[:2]) if triggers else "no trigger words"
-        menu_lines.append(f'- {fname}: triggers={trigger_str}  desc="{desc[:120]}"')
+        tags = entry.get("tags", [])
+        trigger_str = ", ".join(f'"{t}"' for t in triggers[:3]) if triggers else "none"
+        tag_str = ", ".join(tags[:6]) if tags else ""
+        line = f'- {fname}: triggers=[{trigger_str}]'
+        if tag_str:
+            line += f'  tags=[{tag_str}]'
+        if desc:
+            line += f'  desc="{desc[:100]}"'
+        menu_lines.append(line)
     menu = "\n".join(menu_lines)
 
     try:
