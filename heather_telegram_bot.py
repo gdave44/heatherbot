@@ -7538,7 +7538,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "  NSFW if the scene involves: nudity, exposed genitals/nipples, manual genital "
             "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
             "or any erotic physical contact with genitals. Otherwise SFW.\n"
-            "- Remaining lines: the FLUX prompt (comma-separated phrases, 120-180 words)\n"
+            "- Remaining lines: the FLUX prompt (comma-separated phrases, 180-260 words)\n"
             "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
             "Scene: 'give me a blowjob' → NSFW prompt:\n"
             "NSFW\n"
@@ -7572,10 +7572,13 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "then weave in character physical details — NEVER lead with character description\n"
             "- The Scene request is the PRIMARY requirement — every specific detail in it MUST "
             "appear in the prompt. Character description is secondary and can be abbreviated.\n"
-            "- Always include: exact action/pose from scene, setting/location, expression, camera angle, lighting\n"
-            "- Add rich detail: background elements, clothing textures/colors, skin details, hair state, shadows, depth of field\n"
-            "- For SFW: describe outfit fully (fabric, fit, color), makeup, accessories, environment details\n"
-            "- For NSFW: describe body positioning in full, clothing state (what's removed/pushed aside), anatomy detail, arousal state\n"
+            "- Always include: exact action/pose, body position and orientation, setting/location, facial expression, mood/atmosphere, camera angle, lighting\n"
+            "- POSITION DETAIL: describe exactly how the body is positioned — legs, arms, hands, hips, angle relative to camera; e.g. 'seated with legs crossed', 'lying on back with knees bent', 'standing facing away with head turned over shoulder'\n"
+            "- MOOD: include emotional/atmospheric phrases — e.g. 'sultry gaze', 'playful smirk', 'flushed cheeks', 'eyes half-closed', 'biting lower lip', 'relaxed and confident', 'tense anticipation'\n"
+            "- ENVIRONMENT: describe the full background — furniture, surfaces, objects in frame, wall color/texture, window light, time of day feel\n"
+            "- SKIN AND BODY: include skin texture phrases, muscle definition, curves, visible details — e.g. 'visible collarbone', 'slight curve of hip', 'toned stomach', 'natural skin texture with subtle imperfections'\n"
+            "- For SFW: describe outfit fully (fabric, fit, cut, color), makeup, hair state (loose, tied, messy), accessories, how clothing fits the body\n"
+            "- For NSFW: describe the sex act in explicit physical detail — body parts involved, how they are touching/penetrating/stroking, angle and depth, rhythm implied; describe arousal state (wetness, erection, flushed skin); describe what each person's hands and body are doing; do not euphemize or summarize\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
@@ -7653,7 +7656,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 400,
+                "max_tokens": 550,
                 "stream": False,
             },
             timeout=20,
