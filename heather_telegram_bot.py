@@ -7073,7 +7073,9 @@ def ensure_face_image_uploaded() -> Optional[str]:
     return _comfyui_face_image_name
 
 def queue_comfyui_prompt(workflow: dict) -> str:
-    data = json.dumps({"prompt": workflow}).encode('utf-8')
+    # Strip any metadata keys (starting with _) — ComfyUI only accepts node dicts
+    clean = {k: v for k, v in workflow.items() if not k.startswith('_')}
+    data = json.dumps({"prompt": clean}).encode('utf-8')
     req = urllib.request.Request(
         f"{COMFYUI_ENDPOINT}/prompt",
         data=data,
