@@ -7417,13 +7417,14 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- If the scene explicitly states a location → always use that location\n\n"
             "SFW/NSFW DEFAULT RULES — apply these when the request is ambiguous:\n"
             "- Massage, massage table, yoga, hiking, working out, cooking, driving, "
-            "studio, outdoors, selfie, outfit — default SFW unless the conversation "
-            "or request explicitly escalates to sexual content\n"
-            "- A request to 'show me on the massage table' or 'picture at work' is SFW "
-            "by default — a professional or personal photo, not an explicit one\n"
-            "- Only classify NSFW if the request or recent conversation EXPLICITLY mentions "
-            "sexual acts, nudity, genitals, or erotic touch. Do not infer sexual intent "
-            "from the occupation alone\n"
+            "studio, outdoors, selfie, outfit — default SFW\n"
+            "- Only classify NSFW if the CURRENT SCENE REQUEST explicitly mentions "
+            "sexual acts, nudity, genitals, erotic touch, or explicit body parts\n"
+            "- Past conversation history alone does NOT make a new ambiguous request NSFW\n"
+            "- 'Show me on the massage table' = SFW professional/personal photo\n"
+            "- 'Show me giving a happy ending on the massage table' = NSFW (explicit act stated)\n"
+            "- Do NOT infer sexual intent from occupation — a massage therapist can take "
+            "a normal selfie at work\n"
             "- When in doubt: SFW\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
@@ -9184,7 +9185,7 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                 await status_msg.edit_text("📤 Sending...")
 
                 caption = await loop.run_in_executor(
-                    None, lambda: _generate_photo_caption(chat_id, description, prebuilt_prompt, is_nsfw=is_nsfw)
+                    None, lambda: _generate_photo_caption(chat_id, description, prebuilt_prompt, is_nsfw=original_is_nsfw)
                 )
 
                 image_file = io.BytesIO(image_data)
