@@ -5663,7 +5663,7 @@ def generate_face_reference() -> bool:
         for nid, node in workflow.items():
             inputs = node.get("inputs", {})
             if "seed" in inputs:
-                inputs["seed"] = random.randint(0, 2**53 - 1)
+                inputs["seed"] = random.randint(0, 2**32 - 1)
         if _face_guidance_node and _face_guidance_node in workflow:
             workflow[_face_guidance_node]["inputs"]["guidance"] = FLUX_GUIDANCE
     else:
@@ -5674,7 +5674,7 @@ def generate_face_reference() -> bool:
             workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
         for nid in _WF_SAMPLER_NODES:
             if nid in workflow and "seed" in workflow[nid].get("inputs", {}):
-                workflow[nid]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+                workflow[nid]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
         if _WF_GUIDANCE_NODE and _WF_GUIDANCE_NODE in workflow:
             workflow[_WF_GUIDANCE_NODE]["inputs"]["guidance"] = FLUX_GUIDANCE
         # Route output past face swap nodes
@@ -7675,11 +7675,11 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     for _nid, _node in workflow.items():
         _seed_val = _node.get("inputs", {}).get("seed")
         if isinstance(_seed_val, int):
-            _node["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+            _node["inputs"]["seed"] = random.randint(0, 2**32 - 1)
         # Some nodes use noise_seed instead of seed (e.g. RandomNoise)
         _noise_val = _node.get("inputs", {}).get("noise_seed")
         if isinstance(_noise_val, int):
-            _node["inputs"]["noise_seed"] = random.randint(0, 2**53 - 1)
+            _node["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
 
     # Set positive prompt
     if POSITIVE_PROMPT_NODE in workflow:
