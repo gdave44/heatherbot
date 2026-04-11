@@ -570,6 +570,7 @@ COMFYUI_ENDPOINT = COMFYUI_URL
 
 # ComfyUI settings — FLUX.1 dev pipeline
 WORKFLOW_FILE = os.getenv("COMFYUI_WORKFLOW_FILE", os.path.join(CONFIG_DIR, "workflow_flux.json"))
+FACE_WORKFLOW_FILE = os.getenv("COMFYUI_FACE_WORKFLOW_FILE", os.path.join(CONFIG_DIR, "workflow_face.json"))
 POSITIVE_PROMPT_NODE = "3"
 NEGATIVE_PROMPT_NODE = "4"
 FACE_IMAGE_NODE = "10"
@@ -5633,14 +5634,14 @@ def _build_face_reference_prompt() -> str:
 def generate_face_reference() -> bool:
     """Generate a portrait via ComfyUI and save it as the face reference image.
 
-    Called at startup when heather_face.png is missing. Builds a minimal
-    workflow with no LoRAs and no face swap so the output is a clean,
-    unmodified portrait usable as a ReActor source face.
+    Called at startup when heather_face.png is missing. Uses FACE_WORKFLOW
+    (workflow_face.json) if available; otherwise derives a minimal workflow
+    from the main workflow by stripping face swap and LoRA nodes.
 
     Returns True on success, False on any failure.
     """
-    if not COMFYUI_WORKFLOW:
-        main_logger.warning("[FACE-GEN] Workflow not loaded — cannot generate face reference")
+    if not COMFYUI_WORKFLOW and not FACE_WORKFLOW:
+        main_logger.warning("[FACE-GEN] No workflow loaded — cannot generate face reference")
         return False
 
     is_online, _ = check_comfyui_status()
@@ -5655,34 +5656,39 @@ def generate_face_reference() -> bool:
     full_prompt = f"{portrait_prompt}{quality_suffix}"
     main_logger.info(f"[FACE-GEN] Portrait prompt: {full_prompt}")
 
-    # Build a minimal workflow: base checkpoint → KSampler → save
-    # Copy the base workflow and strip face swap + LoRA nodes
-    workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
-
-    # Set the portrait prompt
-    if POSITIVE_PROMPT_NODE in workflow:
-        workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-
-    # Randomize seed
-    for nid in ["7", "14"]:
-        if nid in workflow and "seed" in workflow[nid].get("inputs", {}):
-            workflow[nid]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
-
-    # Set FLUX guidance
-    if "5" in workflow:
-        workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
-
-    # Remove face swap nodes — output directly from the raw generation
-    if "9" in workflow:
-        workflow["9"]["inputs"]["images"] = ["8", 0]
-    for nid in ["10", "11", "13", "14", "15", "20", "21", "22", "23", "24"]:
-        if nid in workflow:
-            del workflow[nid]
-
-    # Portrait framing: square crop
-    if "6" in workflow:
-        workflow["6"]["inputs"]["width"] = 768
-        workflow["6"]["inputs"]["height"] = 768
+    if FACE_WORKFLOW:
+        # Use the dedicated face workflow as-is — just inject the prompt and randomize seeds
+        main_logger.info(f"[FACE-GEN] Using dedicated face workflow: {FACE_WORKFLOW_FILE}")
+        workflow = json.loads(json.dumps(FACE_WORKFLOW))
+        if POSITIVE_PROMPT_NODE in workflow:
+            workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+        for nid, node in workflow.items():
+            inputs = node.get("inputs", {})
+            if "seed" in inputs:
+                inputs["seed"] = random.randint(0, 2**53 - 1)
+        if "5" in workflow:
+            workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+    else:
+        # Fallback: derive from main workflow by stripping face swap + LoRA nodes
+        main_logger.info("[FACE-GEN] Deriving face workflow from main workflow (create workflow_face.json to avoid this)")
+        workflow = json.loads(json.dumps(COMFYUI_WORKFLOW))
+        if POSITIVE_PROMPT_NODE in workflow:
+            workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+        for nid in ["7", "14"]:
+            if nid in workflow and "seed" in workflow[nid].get("inputs", {}):
+                workflow[nid]["inputs"]["seed"] = random.randint(0, 2**53 - 1)
+        if "5" in workflow:
+            workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
+        # Route output past face swap nodes
+        if "9" in workflow:
+            workflow["9"]["inputs"]["images"] = ["8", 0]
+        for nid in ["10", "11", "13", "14", "15", "20", "21", "22", "23", "24"]:
+            if nid in workflow:
+                del workflow[nid]
+        # Portrait framing: square crop
+        if "6" in workflow:
+            workflow["6"]["inputs"]["width"] = 768
+            workflow["6"]["inputs"]["height"] = 768
 
     try:
         prompt_id = queue_comfyui_prompt(workflow)
@@ -6577,6 +6583,12 @@ if COMFYUI_WORKFLOW:
     main_logger.info(f"[COMFYUI] Workflow loaded: {WORKFLOW_FILE}")
 else:
     main_logger.warning(f"[COMFYUI] Workflow NOT found: {WORKFLOW_FILE}")
+
+FACE_WORKFLOW = load_comfyui_workflow(FACE_WORKFLOW_FILE)
+if FACE_WORKFLOW:
+    main_logger.info(f"[COMFYUI] Face workflow loaded: {FACE_WORKFLOW_FILE}")
+else:
+    main_logger.info(f"[COMFYUI] Face workflow not found ({FACE_WORKFLOW_FILE}) — will derive from main workflow if needed")
 if os.path.exists(HEATHER_FACE_IMAGE):
     main_logger.info(f"[COMFYUI] Face image found: {HEATHER_FACE_IMAGE}")
 else:
@@ -6844,8 +6856,9 @@ def build_lora_registry() -> None:
         _save_lora_registry()
     main_logger.info(f"[LORA] Registry ready: {len(LORA_REGISTRY)} LoRAs")
 
-# Scene-specific LoRAs to skip in dynamic selection (always-on, handled separately)
-_ALWAYS_ON_LORAS = {"NSFW_master.safetensors", "flux-female-anatomy.safetensors"}
+# LoRAs excluded from dynamic selection — retired/superseded files only.
+# There are no always-on LoRAs; the LLM selects all of them including NSFW base LoRAs.
+_ALWAYS_ON_LORAS: set = set()
 
 # LoRA filenames that have been superseded or renamed — excluded from selection
 # even if the old file still exists on disk.
@@ -6910,12 +6923,15 @@ def _select_loras_for_scene(scene_text: str, is_nsfw: bool) -> List[tuple]:
                     {
                         "role": "system",
                         "content": (
-                            "You select LoRA models for a ComfyUI image generation pipeline. "
-                            "Given a scene description and a list of available LoRAs with their "
-                            "trigger words, return a JSON array of filenames that apply to this scene. "
-                            "Only include LoRAs that are clearly relevant. "
-                            "Return ONLY a JSON array like: [\"file1.safetensors\", \"file2.safetensors\"] "
-                            "or [] if none apply. No explanation."
+                            "You select LoRA models for a ComfyUI FLUX image generation pipeline. "
+                            "Given a scene description and the available LoRAs, return a JSON array "
+                            "of filenames to apply. Rules:\n"
+                            "- Only include LoRAs clearly relevant to this specific scene\n"
+                            "- For explicit/NSFW scenes: include any NSFW base quality LoRAs "
+                            "(e.g. NSFW_master) that improve nude/explicit output quality\n"
+                            "- For SFW scenes: do NOT include NSFW base LoRAs\n"
+                            "- If no LoRAs apply, return []\n"
+                            "Return ONLY a JSON array: [\"file1.safetensors\"] or []. No explanation."
                         ),
                     },
                     {
@@ -7660,99 +7676,56 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     if "5" in workflow:
         workflow["5"]["inputs"]["guidance"] = FLUX_GUIDANCE
 
-    # NSFW: inject LoRAs only if they are installed in ComfyUI
-    if is_nsfw:
-        nsfw_lora = "NSFW_master.safetensors"
-        anatomy_lora = "flux-female-anatomy.safetensors"
-        has_nsfw_lora = _lora_available(nsfw_lora)
+    # LoRA injection — fully LLM-driven for both SFW and NSFW.
+    # No LoRAs are baked in; the LLM selects all of them (including NSFW base LoRAs)
+    # from the registry. If the LLM selects none, the base model runs clean.
+    _lora_scan = (user_description + " " + (prebuilt_prompt or "")).lower()
+    scene_loras = _select_loras_for_scene(_lora_scan, is_nsfw)
+
+    if scene_loras:
         last_model_node = "1"  # checkpoint model output
         last_clip_node = "1"   # checkpoint clip output
-
-        # Combined search text: original request + LLM-generated prompt.
-        # LoRA keyword checks scan both so that descriptive language the LLM
-        # added (e.g. "hand stroking cock") triggers the right LoRA even when
-        # the raw user request was more casual ("give him a handjob").
-        _lora_scan = (user_description + " " + (prebuilt_prompt or "")).lower()
-
-        if has_nsfw_lora:
-            workflow["20"] = {
+        dyn_node_id = 20
+        for lora_file, trigger_word in scene_loras:
+            if not _lora_available(lora_file):
+                continue
+            # Hard gate: block retired or incompatible LoRAs at injection time.
+            if lora_file in _RETIRED_LORAS:
+                main_logger.warning(f"[LORA] Blocked retired LoRA at injection: {lora_file}")
+                continue
+            _inj_bm = _effective_base_model(lora_file, LORA_REGISTRY.get(lora_file, {}))
+            if _inj_bm not in _COMPATIBLE_BASE_MODELS and _inj_bm != "unknown":
+                main_logger.warning(
+                    f"[LORA] Blocked incompatible LoRA at injection: {lora_file} (base={_inj_bm})"
+                )
+                continue
+            node_key = str(dyn_node_id)
+            workflow[node_key] = {
                 "inputs": {
-                    "lora_name": nsfw_lora,
+                    "lora_name": lora_file,
                     "strength_model": 0.8,
                     "strength_clip": 0.8,
                     "model": [last_model_node, 0],
                     "clip": [last_clip_node, 1],
                 },
                 "class_type": "LoraLoader",
-                "_meta": {"title": "NSFW Master"}
+                "_meta": {"title": lora_file},
             }
-            last_model_node = "20"
-            last_clip_node = "20"
+            last_model_node = node_key
+            last_clip_node = node_key
+            if trigger_word:
+                full_prompt = f"{trigger_word}, {full_prompt}"
+                if POSITIVE_PROMPT_NODE in workflow:
+                    workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
+            main_logger.info(f"[LORA] Injected: {lora_file} | trigger: {trigger_word}")
+            dyn_node_id += 1
 
-            vulva_keywords = ["pussy", "vulva", "labia", "spread", "laying", "laying_down",
-                              "legs apart", "legs spread", "exposed", "closeup", "close up"]
-            needs_anatomy_lora = any(kw in _lora_scan for kw in vulva_keywords)
-            if needs_anatomy_lora and _lora_available(anatomy_lora):
-                workflow["21"] = {
-                    "inputs": {
-                        "lora_name": anatomy_lora,
-                        "strength_model": 0.5,
-                        "strength_clip": 0.5,
-                        "model": [last_model_node, 0],
-                        "clip": [last_clip_node, 1],
-                    },
-                    "class_type": "LoraLoader",
-                    "_meta": {"title": "Anatomy Detail"}
-                }
-                last_model_node = "21"
-                last_clip_node = "21"
-                main_logger.info("NSFW image — NSFW Master + anatomy LoRAs injected")
-            else:
-                main_logger.info("NSFW image — NSFW Master LoRA only")
-
-            # Scene-specific LoRAs — selected dynamically by LLM from the registry
-            scene_loras = _select_loras_for_scene(_lora_scan, is_nsfw)
-            dyn_node_id = 22
-            for lora_file, trigger_word in scene_loras:
-                if not _lora_available(lora_file):
-                    continue
-                # Hard gate: block retired or incompatible LoRAs at injection time.
-                if lora_file in _RETIRED_LORAS:
-                    main_logger.warning(f"[LORA] Blocked retired LoRA at injection: {lora_file}")
-                    continue
-                _inj_bm = _effective_base_model(lora_file, LORA_REGISTRY.get(lora_file, {}))
-                if _inj_bm not in _COMPATIBLE_BASE_MODELS and _inj_bm != "unknown":
-                    main_logger.warning(
-                        f"[LORA] Blocked incompatible LoRA at injection: {lora_file} (base={_inj_bm})"
-                    )
-                    continue
-                node_key = str(dyn_node_id)
-                workflow[node_key] = {
-                    "inputs": {
-                        "lora_name": lora_file,
-                        "strength_model": 0.8,
-                        "strength_clip": 0.8,
-                        "model": [last_model_node, 0],
-                        "clip": [last_clip_node, 1],
-                    },
-                    "class_type": "LoraLoader",
-                    "_meta": {"title": lora_file},
-                }
-                last_model_node = node_key
-                last_clip_node = node_key
-                if trigger_word:
-                    full_prompt = f"{trigger_word}, {full_prompt}"
-                    if POSITIVE_PROMPT_NODE in workflow:
-                        workflow[POSITIVE_PROMPT_NODE]["inputs"]["text"] = full_prompt
-                main_logger.info(f"NSFW image — dynamic LoRA injected: {lora_file} | trigger: {trigger_word}")
-                dyn_node_id += 1
-
-            workflow["7"]["inputs"]["model"] = [last_model_node, 0]
-            workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
-            workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
-        else:
-            main_logger.info("[COMFYUI] NSFW requested but no NSFW LoRA available — generating with base model only")
-    # SFW: no LoRAs, use checkpoint directly (already wired in base workflow)
+        workflow["7"]["inputs"]["model"] = [last_model_node, 0]
+        workflow["3"]["inputs"]["clip"] = [last_clip_node, 1]
+        workflow["4"]["inputs"]["clip"] = [last_clip_node, 1]
+        main_logger.info(f"[LORA] {dyn_node_id - 20} LoRA(s) injected")
+    else:
+        main_logger.info("[LORA] No LoRAs selected — running base model clean")
 
     # ControlNet pose injection — detect pose, inject nodes at runtime
     pose_id = detect_pose(user_description)
