@@ -7538,7 +7538,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "  NSFW if the scene involves: nudity, exposed genitals/nipples, manual genital "
             "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
             "or any erotic physical contact with genitals. Otherwise SFW.\n"
-            "- Remaining lines: the FLUX prompt (comma-separated phrases, 50-80 words)\n"
+            "- Remaining lines: the FLUX prompt (comma-separated phrases, 120-180 words)\n"
             "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
             "Scene: 'give me a blowjob' → NSFW prompt:\n"
             "NSFW\n"
@@ -7573,6 +7573,9 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- The Scene request is the PRIMARY requirement — every specific detail in it MUST "
             "appear in the prompt. Character description is secondary and can be abbreviated.\n"
             "- Always include: exact action/pose from scene, setting/location, expression, camera angle, lighting\n"
+            "- Add rich detail: background elements, clothing textures/colors, skin details, hair state, shadows, depth of field\n"
+            "- For SFW: describe outfit fully (fabric, fit, color), makeup, accessories, environment details\n"
+            "- For NSFW: describe body positioning in full, clothing state (what's removed/pushed aside), anatomy detail, arousal state\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
@@ -7650,7 +7653,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 220,
+                "max_tokens": 400,
                 "stream": False,
             },
             timeout=20,
