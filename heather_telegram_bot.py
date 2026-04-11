@@ -9193,6 +9193,73 @@ def _sanitize_image_description(description: str) -> str:
         return ""
     return desc
 
+_FACE_CONTACT_TRIGGERS = [
+    "blowjob", "blow job", "suck my", "suck it", "suck you", "suck me",
+    "suck your cock", "suck your dick", "suck cock", "suck dick",
+    "give me head", "give you head", "go down on", "mouth on",
+    "lick my", "lick your", "lick me", "eat me out", "eat you out",
+    "cunnilingus", "face-sitting", "face sitting", "sit on my face",
+    "kissing", "make out", "making out", "kiss me", "kiss you",
+    "lips on", "tongue on",
+]
+
+_FACE_CONTACT_REFUSALS = [
+    "Haha nope, that angle does NOT work well for me 😂 camera gets all weird",
+    "Ugh I always look terrible at that angle, not happening lol 😅",
+    "My camera does this thing where it just... no. Ask me for something else 😏",
+    "Yeah that one never comes out right on my phone, trust me I've tried 😂",
+    "Mmm I'll pass on that pic — lighting is awful for it. Ask me for something better 😈",
+    "lmaoo no, last time I tried that the photo was a disaster 😂 pick something else",
+    "Not my best angle babe, believe me 😘 what else you want?",
+    "Haha I don't do that kind of photo, camera never cooperates 😂",
+]
+
+def _is_face_contact_photo_request(text: str) -> bool:
+    """Return True if the photo request explicitly asks for a face-contact scene."""
+    lower = text.lower()
+    return any(trigger in lower for trigger in _FACE_CONTACT_TRIGGERS)
+
+def _get_face_contact_refusal(chat_id: int, user_request: str) -> str:
+    """Ask the LLM for a witty in-character refusal, falling back to a static response."""
+    try:
+        persona_name = personality.name
+        base_prompt = personality.get_system_prompt('chat')
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            f"You ARE {persona_name}. You are TEXTING. Write in FIRST PERSON.\n"
+            "The user just asked you to send a photo of something that doesn't photograph well "
+            "(like a blowjob, kissing, face-sitting, or oral sex). You're NOT doing it — "
+            "but give a witty, in-character excuse about why the photo won't work out. "
+            "Make it about camera angles, lighting, or the photo just never looking right — "
+            "NOT about morals or rules. Keep it playful and flirty, under 20 words.\n"
+            "- First person only: I, me, my\n"
+            "- No asterisk actions\n"
+            "- 1 emoji max\n"
+            "- Do NOT mention face swap, AI, or technical reasons"
+        )
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"They asked: {user_request}\nWrite your refusal now."},
+                ],
+                "temperature": 0.95,
+                "max_tokens": 50,
+                "stream": False,
+            },
+            timeout=10,
+        )
+        if response.status_code == 200:
+            text = response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            if text and len(text) > 5:
+                return text
+    except Exception as e:
+        main_logger.warning(f"[FACE_REFUSAL] LLM failed: {e}")
+    return random.choice(_FACE_CONTACT_REFUSALS)
+
+
 async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str):
     """Generate and send image asynchronously (max 1 concurrent via semaphore)"""
 
@@ -9663,6 +9730,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await context.bot.send_message(chat_id,decline)
                 store_message(chat_id, "Heather", decline)
                 return
+            if _is_face_contact_photo_request(user_message):
+                loop = asyncio.get_running_loop()
+                refusal = await loop.run_in_executor(
+                    None, lambda: _get_face_contact_refusal(chat_id, user_message)
+                )
+                await context.bot.send_message(chat_id, refusal)
+                store_message(chat_id, "Heather", refusal)
+                if chat_id in conversations:
+                    conversations[chat_id].append({"role": "assistant", "content": refusal})
+                main_logger.info(f"[{request_id}] Face-contact description deflected (awaiting) for {chat_id}")
+                return
             record_photo_sent(chat_id)
             await generate_and_send_image_async(context.bot, chat_id, user_message)
             return
@@ -9720,6 +9798,20 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             decline = get_photo_cap_decline(chat_id)
             await context.bot.send_message(chat_id,decline)
             store_message(chat_id, "Heather", decline)
+            return
+
+        # Face-contact requests (blowjob, kissing, oral sex, etc.) don't work with face-swap.
+        # Send a witty in-character excuse instead of generating a broken image.
+        if _is_face_contact_photo_request(user_message):
+            loop = asyncio.get_running_loop()
+            refusal = await loop.run_in_executor(
+                None, lambda: _get_face_contact_refusal(chat_id, user_message)
+            )
+            await context.bot.send_message(chat_id, refusal)
+            store_message(chat_id, "Heather", refusal)
+            if chat_id in conversations:
+                conversations[chat_id].append({"role": "assistant", "content": refusal})
+            main_logger.info(f"[{request_id}] Face-contact photo request deflected for {chat_id}: {user_message[:60]}")
             return
 
         # Determine if this is a SPECIFIC request (pose/body part) vs generic ("send nudes", "send a pic")
