@@ -497,13 +497,19 @@ class PersonalityLoader:
         age = self.personality.get('identity', {}).get('age')
         if age:
             parts.append(f"{age}-year-old")
+        if phys.get('ethnicity'):
+            parts.append(phys['ethnicity'].lower())
         parts.append("woman")
+        if phys.get('skin_tone'):
+            parts.append(f"with {phys['skin_tone'].lower()} skin")
         if phys.get('hair'):
-            parts.append(f"with {phys['hair'].lower()}")
+            parts.append(f"{phys['hair'].lower()} hair")
         if phys.get('eyes'):
-            parts.append(f"and {phys['eyes'].lower()} eyes")
+            parts.append(f"{phys['eyes'].lower()} eyes")
         if phys.get('body_type'):
             parts.append(f"{phys['body_type'].lower()} body")
+        if phys.get('hips'):
+            parts.append(f"{phys['hips'].lower()} hips")
         if nsfw and phys.get('breast_description'):
             parts.append(phys['breast_description'].lower())
         elif not nsfw and phys.get('chest_description'):
@@ -7344,18 +7350,24 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
 
         # ── Character physical description — provide BOTH versions; LLM picks based on rating ──
         phys = p.get('physical', {})
-        age  = p.get('identity', {}).get('age', '')
-        hair = phys.get('hair', '')
-        eyes = phys.get('eyes', '')
-        body = phys.get('body_type', '')
+        age        = p.get('identity', {}).get('age', '')
+        hair       = phys.get('hair', '')
+        eyes       = phys.get('eyes', '')
+        body       = phys.get('body_type', '')
+        ethnicity  = phys.get('ethnicity', '')
+        skin_tone  = phys.get('skin_tone', '')
+        hips       = phys.get('hips', '')
         chest_sfw  = phys.get('chest_description', '')
         chest_nsfw = phys.get('breast_description', '')
 
         char_lines = []
         if age:        char_lines.append(f"Age: {age}-year-old woman")
+        if ethnicity:  char_lines.append(f"Ethnicity: {ethnicity}")
+        if skin_tone:  char_lines.append(f"Skin tone: {skin_tone}")
         if hair:       char_lines.append(f"Hair: {hair}")
         if eyes:       char_lines.append(f"Eyes: {eyes}")
         if body:       char_lines.append(f"Body: {body}")
+        if hips:       char_lines.append(f"Hips: {hips}")
         if chest_sfw:  char_lines.append(f"Chest (SFW): {chest_sfw}")
         if chest_nsfw: char_lines.append(f"Chest (NSFW): {chest_nsfw}")
         char_block = "\n".join(char_lines)
