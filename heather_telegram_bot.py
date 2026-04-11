@@ -7552,22 +7552,19 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- If the scene is solo (only the character, no other person) → use a personal location: bedroom, bathroom, living room, home — NOT the workplace\n"
             "- If the scene explicitly states a location → always use that location\n"
             "- NEVER carry a location over from conversation history — only use the location the Scene request specifies or infer fresh from the rules above\n\n"
-            "SFW/NSFW CLASSIFICATION — use semantic judgment, not keyword matching:\n"
-            "Ask yourself: does this scene, as literally described, depict nudity or a sexual act "
-            "actively happening? Not implied. Not adjacent. Actually occurring in the frame.\n"
-            "- NSFW = the scene shows: exposed genitals or nipples, or a sexual act in progress "
-            "(oral sex, penetration, manual genital stimulation, etc.)\n"
-            "- SFW = everything else, including suggestive settings, occupations, or moods\n"
-            "- Rate based on the Scene request alone — not the character's occupation, "
-            "not the location, not the conversation history\n"
-            "- Exception: if the Scene is ambiguous AND recent conversation makes the meaning "
-            "unambiguous (e.g. 'keep doing that' immediately after an explicit exchange) → "
-            "use that context. Otherwise ignore history for rating purposes.\n"
+            "SFW/NSFW CLASSIFICATION — read the Scene text only, ignore conversation history:\n"
+            "Ask: does the Scene text, word for word, describe nudity or a sexual act happening?\n"
+            "- NSFW = the Scene text explicitly shows: exposed genitals/nipples, or a sexual act "
+            "in progress (oral sex, penetration, manual genital stimulation, masturbation)\n"
+            "- SFW = everything that does not meet the above. Conversation history NEVER changes this.\n"
+            "- 'at the grocery store' → SFW. 'at the park' → SFW. 'at home' → SFW.\n"
             "- 'massage' → SFW. 'giving a happy ending' → NSFW. 'erotic massage' → NSFW.\n"
             "- 'in the bath' → SFW. 'naked in the bath' → NSFW.\n"
             "- 'in bed together' → SFW. 'fucking in bed' → NSFW.\n"
             "- 'topless selfie' → NSFW. 'bikini selfie' → SFW.\n"
-            "- When genuinely ambiguous: SFW\n\n"
+            "- 'rubbing your pussy' → NSFW. 'at work' → SFW. 'working out' → SFW.\n"
+            "- If the Scene text contains no sexual words → SFW, full stop.\n"
+            "- When in doubt: SFW\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
             "- ORDER MATTERS: start with the scene/action/setting from the Scene request, "
@@ -7697,7 +7694,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                     remaining = "\n".join(lines[1:]).strip().strip('"').strip("'")
                     remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
                     if remaining and len(remaining) > 20:
-                        main_logger.info(f"[COMFYUI] LLM nsfw={is_nsfw} | prompt: {remaining}")
+                        _nsfw_tag = " nsfw=True |" if is_nsfw else ""
+                        main_logger.info(f"[COMFYUI] LLM{_nsfw_tag} prompt: {remaining}")
                         return remaining, is_nsfw
                 else:
                     # LLM didn't follow format — scan for NSFW/SFW anywhere in first line
@@ -7710,7 +7708,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                         is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
                     prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'") or raw
                     if prompt_text and len(prompt_text) > 20:
-                        main_logger.warning(f"[COMFYUI] LLM format deviation — inferred nsfw={is_nsfw}")
+                        _nsfw_tag2 = " nsfw=True" if is_nsfw else ""
+                        main_logger.warning(f"[COMFYUI] LLM format deviation — inferred{_nsfw_tag2}")
                         main_logger.info(f"[COMFYUI] prompt: {prompt_text}")
                         return prompt_text, is_nsfw
     except Exception as e:
@@ -7773,7 +7772,8 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
         full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
 
     if BREADCRUMB_LOGGING:
-        main_logger.info(f"[COMFYUI] nsfw={is_nsfw} | prompt → {full_prompt}")
+        _nsfw_pfx = " nsfw=True |" if is_nsfw else ""
+        main_logger.info(f"[COMFYUI]{_nsfw_pfx} prompt → {full_prompt}")
 
     # Randomize all literal integer seeds in the workflow.
     # Checks isinstance(seed, int) to avoid overwriting node-reference seeds like ["5", 0].
