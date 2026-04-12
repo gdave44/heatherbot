@@ -7738,6 +7738,20 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
     else:
         full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
 
+    # Post-process: replace any erect penis descriptors with flaccid equivalents.
+    # The LLM sometimes ignores the instruction — this is the hard enforcement layer.
+    import re as _re_erect
+    _erect_replacements = [
+        (r'\berect(?:ion)?\s+(?:cock|penis|dick)\b',  'soft flaccid cock'),
+        (r'\b(?:cock|penis|dick)\s+erect(?:ion)?\b',  'soft flaccid cock'),
+        (r'\bfully\s+erect\b',                         'soft and flaccid'),
+        (r'\bsemi[- ]?erect\b',                        'soft flaccid'),
+        (r'\bhard\s+(?:cock|penis|dick)\b',            'soft cock'),
+        (r'\berect\b',                                 'flaccid'),
+    ]
+    for _pat, _repl in _erect_replacements:
+        full_prompt = _re_erect.sub(_pat, _repl, full_prompt, flags=_re_erect.IGNORECASE)
+
     if BREADCRUMB_LOGGING:
         _nsfw_pfx = " nsfw=True |" if is_nsfw else ""
         main_logger.info(f"[COMFYUI]{_nsfw_pfx} prompt → {full_prompt}")
