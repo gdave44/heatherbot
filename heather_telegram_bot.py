@@ -7602,6 +7602,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "flushed skin); describe what each person's hands and body are doing; do not euphemize or summarize\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
+            "- BODY OWNERSHIP RULE: a cock/penis/dick is always attached to a man — NEVER mention a cock without also describing the man it belongs to (e.g. 'man standing behind her', 'man seated on the bed edge', 'man lying on his back'). A floating disembodied penis is never acceptable.\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
             "- If the conversation context mentions a sex toy/prop and the scene is NSFW, "
             "include it naturally in the prompt\n"
@@ -9995,6 +9996,32 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if chat_id in conversations:
                 conversations[chat_id].append({"role": "assistant", "content": refusal})
             main_logger.info(f"[{request_id}] Face-contact photo request deflected for {chat_id}: {user_message[:60]}")
+            return
+
+        # Short/generic context-based requests — go straight to context-only generation
+        _msg_bare = user_message.lower().strip().rstrip('?!. ')
+        _short_context_triggers = {
+            "show me", "let me see", "show me something", "send me a pic",
+            "send a pic", "send me a photo", "send a photo", "send one",
+            "take one", "snap one", "pic please", "pic pls", "send pic",
+            "send pics", "photo please", "selfie please", "selfie?",
+            "pic?", "pics?", "photo?", "send nudes", "surprise me",
+            "yeah show me", "show me then", "go ahead show me", "let's see",
+            "lets see", "lemme see", "send me something", "i wanna see",
+            "i want to see",
+        }
+        if _msg_bare in _short_context_triggers:
+            is_online, status = check_comfyui_status()
+            if is_online and check_heather_face() and COMFYUI_WORKFLOW:
+                main_logger.info(f"[{request_id}] Short/context-only image request from {chat_id}: '{user_message}'")
+                record_photo_sent(chat_id)
+                await generate_and_send_image_async(context.bot, chat_id, user_message)
+            else:
+                _reason = ("ComfyUI offline" if not is_online
+                           else "face image missing" if not check_heather_face()
+                           else "workflow not loaded")
+                main_logger.warning(f"[{request_id}] Context-only image blocked — {_reason} | chat={chat_id}")
+                await context.bot.send_message(chat_id, "Fuck baby, my camera's not working right now... 😘")
             return
 
         # Determine if this is a SPECIFIC request (pose/body part) vs generic ("send nudes", "send a pic")
