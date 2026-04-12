@@ -897,6 +897,11 @@ VOICE_NUDGE_CHANCE = 0.06       # 6% per qualifying message
 VOICE_NUDGE_MIN_TURNS = 20     # Need 20+ turns
 awaiting_image_description: Dict[int, bool] = {}
 awaiting_image_description_time: Dict[int, float] = {}  # Timeout tracking for /selfie
+# Stores the last generated image state per chat for alteration requests
+# Format: {chat_id: {"seeds": {node_id: seed_val}, "prompt": str, "is_nsfw": bool}}
+_last_image_state: Dict[int, dict] = {}
+# Buffer for seeds captured during the most recent generate_heather_image call
+_pending_image_seeds: dict = {}
 SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
 image_generation_semaphore = asyncio.Semaphore(1)  # Max 1 concurrent generation
 reply_in_progress: set = set()  # Chat IDs currently being replied to — prevents duplicate concurrent replies
@@ -7736,7 +7741,7 @@ def build_heather_prompt(user_description: str, is_nsfw: Optional[bool] = None) 
     return f"{user_description}, {char_prefix}{quality_suffix}"
 
 def generate_heather_image(user_description: str, progress_callback=None, is_nsfw: Optional[bool] = None,
-                           prebuilt_prompt: Optional[str] = None) -> bytes:
+                           prebuilt_prompt: Optional[str] = None, reuse_seeds: Optional[dict] = None) -> bytes:
     """Generate image with ComfyUI using FLUX.1 dev pipeline.
 
     is_nsfw: if supplied (determined from the original request before context
@@ -7775,16 +7780,22 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
         _nsfw_pfx = " nsfw=True |" if is_nsfw else ""
         main_logger.info(f"[COMFYUI]{_nsfw_pfx} prompt → {full_prompt}")
 
-    # Randomize all literal integer seeds in the workflow.
+    # Seed handling: randomize fresh seeds or restore stored seeds for alterations.
     # Checks isinstance(seed, int) to avoid overwriting node-reference seeds like ["5", 0].
+    _captured_seeds: dict = {}
     for _nid, _node in workflow.items():
         _seed_val = _node.get("inputs", {}).get("seed")
         if isinstance(_seed_val, int):
-            _node["inputs"]["seed"] = random.randint(0, 2**32 - 1)
-        # Some nodes use noise_seed instead of seed (e.g. RandomNoise)
+            _new_seed = (reuse_seeds.get(f"{_nid}:seed") if reuse_seeds else None) or random.randint(0, 2**32 - 1)
+            _node["inputs"]["seed"] = _new_seed
+            _captured_seeds[f"{_nid}:seed"] = _new_seed
         _noise_val = _node.get("inputs", {}).get("noise_seed")
         if isinstance(_noise_val, int):
-            _node["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
+            _new_noise = (reuse_seeds.get(f"{_nid}:noise_seed") if reuse_seeds else None) or random.randint(0, 2**32 - 1)
+            _node["inputs"]["noise_seed"] = _new_noise
+            _captured_seeds[f"{_nid}:noise_seed"] = _new_noise
+    # Expose captured seeds via module-level buffer so caller can store them per chat_id
+    _pending_image_seeds["latest"] = _captured_seeds
 
     # Set positive prompt
     if POSITIVE_PROMPT_NODE in workflow:
@@ -9270,6 +9281,88 @@ def _get_face_contact_refusal(chat_id: int, user_request: str) -> str:
     return random.choice(_FACE_CONTACT_REFUSALS)
 
 
+_ALTERATION_PATTERNS = [
+    r'\bsame\b.{0,30}\bbut\b',
+    r'\bbut\b.{0,20}\bthis time\b',
+    r'\bbut\b.{0,20}\binstead\b',
+    r'\bthis time\b.{0,30}\b(with|wearing|in|at|show|make)\b',
+    r'\b(change|swap|switch|replace)\b.{0,40}\b(to|with|for)\b',
+    r'\btry\b.{0,20}\b(again|it again)\b',
+    r'\bmake it\b',
+    r'\bnow\b.{0,15}\b(show|with|in|at|wearing)\b',
+    r'\bsame (one|pic|photo|image|shot)\b',
+    r'\bkeep (everything|the pose|the scene|it)\b.{0,20}\bbut\b',
+    r'\bjust\b.{0,20}\b(change|swap|add|remove|without|with)\b',
+]
+
+def _is_photo_alteration_request(text: str, chat_id: int) -> bool:
+    """Return True if the request is asking to alter the last generated image."""
+    if chat_id not in _last_image_state:
+        return False
+    import re as _re_alt
+    lower = text.lower()
+    return any(_re_alt.search(pat, lower) for pat in _ALTERATION_PATTERNS)
+
+
+def _build_alteration_prompt(chat_id: int, user_request: str, previous_prompt: str, previous_is_nsfw: bool) -> tuple:
+    """Ask the LLM to modify a previous FLUX prompt based on the user's alteration request.
+    Returns (new_prompt: str, is_nsfw: bool).
+    """
+    try:
+        anchor = _clean_photo_request(user_request)
+        system_prompt = (
+            "You are an expert ComfyUI/FLUX image prompt editor. "
+            "You will receive a previous image prompt and a user's alteration request. "
+            "Your job is to modify the prompt to incorporate the requested changes while "
+            "keeping everything else the same.\n\n"
+            "OUTPUT FORMAT — exactly two parts, no labels:\n"
+            "- First line: NSFW or SFW\n"
+            "- Remaining lines: the modified FLUX prompt (comma-separated phrases, 180-260 words)\n\n"
+            "RULES:\n"
+            "- Keep all elements from the previous prompt that the user did NOT ask to change\n"
+            "- Apply only the changes the user explicitly requested\n"
+            "- Maintain the same scene, setting, pose, and mood unless specifically changed\n"
+            "- Re-rate NSFW/SFW based on the final modified prompt content\n"
+            "- No preamble, no explanation\n"
+            + ("- Previous rating was NSFW — keep that unless the change makes it clearly SFW\n" if previous_is_nsfw else
+               "- Previous rating was SFW — only mark NSFW if the change explicitly adds nudity or sexual content\n")
+        )
+        user_content = f"Previous prompt:\n{previous_prompt}\n\nUser's alteration request: {anchor}"
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 550,
+                "stream": False,
+            },
+            timeout=20,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            raw = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            lines = raw.splitlines()
+            if lines:
+                import re as _re3
+                first = _re3.sub(r'^line\s*\d+[+:]?\s*', '', lines[0].strip(), flags=_re3.IGNORECASE).strip().upper()
+                if first in ("NSFW", "SFW"):
+                    is_nsfw = (first == "NSFW")
+                    remaining = "\n".join(lines[1:]).strip().strip('"').strip("'")
+                    remaining = _re3.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re3.IGNORECASE).strip()
+                    if remaining and len(remaining) > 20:
+                        main_logger.info(f"[COMFYUI] Alteration prompt built (nsfw={is_nsfw}): {remaining[:80]}")
+                        return remaining, is_nsfw
+    except Exception as e:
+        main_logger.warning(f"[COMFYUI] Alteration prompt LLM failed: {e}")
+    # Fallback: use the previous prompt unchanged
+    return previous_prompt, previous_is_nsfw
+
+
 async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str):
     """Generate and send image asynchronously (max 1 concurrent via semaphore)"""
 
@@ -9283,13 +9376,28 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         else:
             clean_desc = random.choice(PROACTIVE_SELFIE_DESCRIPTIONS)
 
-    # Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
-    # The LLM sees the full conversation history so it can pick up props (toys, etc.)
-    # mentioned in recent chat without any pre-injection on our side.
+    # Check if this is an alteration of the previous image
+    _is_alteration = _is_photo_alteration_request(description, chat_id)
+    _reuse_seeds = None
+
     loop = asyncio.get_running_loop()
-    prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
-        None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
-    )
+
+    if _is_alteration:
+        prev_state = _last_image_state[chat_id]
+        _reuse_seeds = prev_state["seeds"]
+        prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
+            None, lambda: _build_alteration_prompt(
+                chat_id, clean_desc, prev_state["prompt"], prev_state["is_nsfw"]
+            )
+        )
+        main_logger.info(f"[COMFYUI] Alteration request — reusing {len(_reuse_seeds)} seed(s) from last image")
+    else:
+        # Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
+        # The LLM sees the full conversation history so it can pick up props (toys, etc.)
+        # mentioned in recent chat without any pre-injection on our side.
+        prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
+            None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
+        )
 
     # Fallback toy prop injection: if the LLM missed a toy prop that's clearly in the
     # conversation, append it so the dildo LoRA keyword check still fires.
@@ -9374,7 +9482,8 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
             image_data = await loop.run_in_executor(
                 None,
                 lambda: generate_heather_image(description, is_nsfw=original_is_nsfw,
-                                              prebuilt_prompt=prebuilt_prompt)
+                                              prebuilt_prompt=prebuilt_prompt,
+                                              reuse_seeds=_reuse_seeds)
             )
 
             if image_data and is_valid_image_data(image_data):
@@ -9401,6 +9510,13 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
                 await status_msg.delete()
                 main_logger.info(f"Sent generated image to {chat_id}")
                 store_message(chat_id, "Heather", f"[Generated image: {description[:50]}]")
+
+                # Store image state for potential alteration requests
+                _last_image_state[chat_id] = {
+                    "seeds": dict(_pending_image_seeds.get("latest", {})),
+                    "prompt": prebuilt_prompt or description,
+                    "is_nsfw": original_is_nsfw,
+                }
             elif image_data:
                 main_logger.warning(f"Invalid image data for {chat_id}: {len(image_data)} bytes")
                 await status_msg.edit_text("Fuck, the pic came out weird... try again? 😅")
