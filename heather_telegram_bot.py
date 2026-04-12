@@ -7541,14 +7541,11 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
             + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
             "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
-            "  NSFW if the scene involves: nudity, exposed genitals/nipples, manual genital "
-            "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
-            "or any erotic physical contact with genitals. Otherwise SFW.\n"
             "- Remaining lines: the FLUX prompt (comma-separated phrases, 250-350 words)\n"
             "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
-            "Scene: 'give me a blowjob' → redirected to handjob (face rule), NSFW prompt:\n"
+            "Scene: 'show me naked in my bedroom' → NSFW prompt:\n"
             "NSFW\n"
-            "bedroom, woman kneeling beside bed, both hands wrapped around thick erect cock stroking slowly, 33-year-old woman, long brunette hair, brown eyes, sultry gaze toward camera, natural lighting, amateur photo\n\n"
+            "bedroom, woman standing beside bed fully nude, soft warm lamplight, 33-year-old woman, long brunette hair loose over shoulders, brown eyes, confident expression, hands resting at sides, natural lighting, amateur photo\n\n"
             "Scene: 'show me on the massage table' → SFW prompt:\n"
             "SFW\n"
             "massage table, woman lying on massage table, massage studio, 33-year-old woman, long brunette hair, brown eyes, relaxed expression, soft ambient lighting, amateur photo\n\n"
@@ -7559,124 +7556,54 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- If the scene explicitly states a location → always use that location\n"
             "- NEVER carry a location over from conversation history — only use the location the Scene request specifies or infer fresh from the rules above\n\n"
             "SFW/NSFW CLASSIFICATION — read the Scene text only, ignore conversation history:\n"
-            "Ask: does the Scene text, word for word, describe nudity or a sexual act happening?\n"
-            "- NSFW = the Scene text explicitly shows: exposed genitals/nipples, or a sexual act "
-            "in progress (oral sex, vaginal penetration, anal penetration, manual genital stimulation, masturbation)\n"
-            "- SFW = everything that does not meet the above. Conversation history NEVER changes this.\n"
-            "- 'at the grocery store' → SFW. 'at the park' → SFW. 'at home' → SFW.\n"
-            "- 'massage' → SFW. 'giving a happy ending' → NSFW. 'erotic massage' → NSFW.\n"
+            "- NSFW = the scene shows nudity: exposed genitals (pussy, ass), bare breasts/nipples, "
+            "or a fully or partially nude body. Nudity alone is the only trigger.\n"
+            "- SFW = clothed, swimwear, lingerie (covered), suggestive poses without nudity.\n"
+            "- 'naked' / 'nude' / 'topless' / 'bare' / 'no clothes' → NSFW\n"
             "- 'in the bath' → SFW. 'naked in the bath' → NSFW.\n"
-            "- 'in bed together' → SFW. 'fucking in bed' → NSFW.\n"
-            "- 'topless selfie' → NSFW. 'bikini selfie' → SFW.\n"
-            "- 'rubbing your pussy' → NSFW. 'at work' → SFW. 'working out' → SFW.\n"
-            "- If the Scene text contains no sexual words → SFW, full stop.\n"
+            "- 'topless selfie' → NSFW. 'bikini selfie' → SFW. 'lingerie' → SFW.\n"
+            "- 'at the grocery store' / 'at the park' / 'massage table' / 'working out' → SFW\n"
+            "- If the Scene text contains no nudity words → SFW, full stop.\n"
             "- When in doubt: SFW\n\n"
+            "SEXUAL ACTIVITY RULE — this is critical:\n"
+            "- Do NOT generate any sexual acts — no penetration, no oral sex, no handjobs, "
+            "no fingering, no masturbation, no sex toys in use. If the scene request asks for "
+            "a sexual act, ignore the act and generate a nude or suggestive solo pose instead.\n"
+            "- NSFW scenes show nudity only: the character posed nude or partially nude, "
+            "in a suggestive position, showing her body — NOT performing any sexual act.\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
-            "- ORDER MATTERS: start with the scene/action/setting from the Scene request, "
+            "- ORDER MATTERS: start with the scene/setting from the Scene request, "
             "then weave in character physical details — NEVER lead with character description\n"
-            "- The Scene request is the PRIMARY requirement — every specific detail in it MUST "
-            "appear in the prompt. Character description is secondary and can be abbreviated.\n"
-            "- HISTORY ISOLATION: conversation history provides context ONLY. NEVER import "
-            "props, people, body parts, or locations from history into the prompt unless the "
-            "Scene request explicitly mentions them. A solo masturbation scene has NO cock, "
-            "NO second person, NO massage table unless the Scene says so.\n"
-            "- SOLO SCENES: if the Scene only involves the character and no other person is "
-            "mentioned, the scene is solo — one woman only, no male body parts in frame.\n"
-            "- Always include: exact action/pose, body position and orientation, setting/location, facial expression, mood/atmosphere, camera angle, lighting\n"
-            "- POSITION DETAIL: describe exactly how the body is positioned — legs, arms, hands, hips, angle relative to camera; e.g. 'seated with legs crossed', 'lying on back with knees bent', 'standing facing away with head turned over shoulder'\n"
-            "- MOOD: include emotional/atmospheric phrases — e.g. 'sultry gaze', 'playful smirk', 'flushed cheeks', 'eyes half-closed', 'biting lower lip', 'relaxed and confident', 'tense anticipation'\n"
-            "- ENVIRONMENT: describe the full background — furniture, surfaces, objects in frame, wall color/texture, window light, time of day feel\n"
-            "- SKIN AND BODY: include skin texture phrases, muscle definition, curves, visible details — e.g. 'visible collarbone', 'slight curve of hip', 'toned stomach', 'natural skin texture with subtle imperfections'\n"
-            "- CLOTHING DETAIL (required for any scene where clothing is visible): describe every garment with — "
-            "color (specific: 'dusty rose', 'deep navy', not just 'pink' or 'blue'), "
-            "fabric/texture (silk, ribbed cotton, sheer chiffon, distressed denim, lace trim, satin sheen), "
-            "cut/silhouette (fitted, flowy, wrap-style, plunging V-neck, off-shoulder, cropped, high-waisted), "
-            "fit on the body (hugging curves, loose and draped, clinging to hips, gaping slightly at chest), "
-            "and visible details (buttons, zipper, seams, hem length, straps, neckline shape)\n"
-            "- For SFW: cover all visible clothing in the above detail; add makeup (lip color, eye look), "
-            "hair state (loose waves, messy bun, pulled back with strands falling), accessories (jewelry, bag, shoes)\n"
-            "- For NSFW: describe clothing state (what is removed, pushed aside, pulled down, bunched at waist); "
-            "describe the sex act in explicit physical detail — body parts involved, how they are touching/"
-            "penetrating/stroking, angle and depth, rhythm implied; describe arousal state (wetness, erection, "
-            "flushed skin); describe what each person's hands and body are doing; do not euphemize or summarize\n"
+            "- The Scene request is the PRIMARY requirement. Character description is secondary.\n"
+            "- HISTORY ISOLATION: conversation history is context only. NEVER import props, "
+            "people, or locations from history unless the Scene request mentions them.\n"
+            "- SOLO SCENES: if no other person is mentioned in the Scene, it is solo — "
+            "one woman only, no other people in frame.\n"
+            "- Always include: pose, body position and orientation, setting/location, "
+            "facial expression, mood/atmosphere, camera angle, lighting\n"
+            "- POSITION DETAIL: describe exactly how the body is positioned — legs, arms, "
+            "hands, hips, angle relative to camera\n"
+            "- MOOD: sultry gaze, playful smirk, flushed cheeks, eyes half-closed, "
+            "biting lower lip, relaxed and confident, tense anticipation\n"
+            "- ENVIRONMENT: full background — furniture, surfaces, wall color/texture, lighting\n"
+            "- SKIN AND BODY: skin texture, muscle definition, curves, visible details\n"
+            "- CLOTHING DETAIL (when clothing is visible): for every garment describe — "
+            "specific color ('dusty rose', 'deep navy'), fabric/texture (silk, ribbed cotton, "
+            "sheer chiffon, distressed denim, lace trim), cut/silhouette (fitted, flowy, "
+            "wrap-style, plunging V-neck, off-shoulder, cropped, high-waisted), "
+            "fit on the body, and visible details (buttons, seams, hem, straps, neckline)\n"
+            "- For SFW: describe full outfit, makeup (lip color, eye look), hair state, accessories\n"
+            "- For NSFW: describe clothing state (removed, pushed aside, bunched at waist); "
+            "describe the nude body explicitly — exposed breasts, bare pussy, bare ass — "
+            "use anatomical terms (pussy, nipples, ass, breasts); do NOT use euphemisms\n"
+            "- FACE INTERACTION RULE: never describe kissing, lips touching another person, "
+            "or tongue contact — these break face-swap compositing\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
-            "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
-            "- BODY OWNERSHIP RULE: a cock/penis/dick is always attached to a man — NEVER mention a cock without also describing the man it belongs to (e.g. 'man standing behind her', 'man seated on the bed edge', 'man lying on his back'). A floating disembodied penis is never acceptable.\n"
-            "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
-            "- If the conversation context mentions a sex toy/prop and the scene is NSFW, "
-            "include it naturally in the prompt\n"
-            "- FACE INTERACTION RULE: NEVER describe anything touching, near, or interacting with "
-            "the face — no kissing, no oral sex (blowjob, cunnilingus, licking), no cock near the "
-            "mouth, no fingers near lips, no face-sitting. These break face-swap compositing. "
-            "Redirect to an equivalent non-face act: blowjob → handjob (stroking cock with hand); "
-            "kissing → body kiss (lips on neck, chest, or shoulder); cunnilingus → fingering; "
-            "face-sitting → riding/cowgirl. Keep the NSFW level and mood the same.\n"
-            "- NEVER change or omit details the scene request explicitly states\n"
             "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
             "- Do NOT add nudity if the scene says clothed/wearing\n"
             "- No preamble, no explanation, no quotes around the prompt\n"
-            "TERMINOLOGY GLOSSARY (interpret these correctly):\n"
-            "- 'blowjob' / 'oral sex' / 'suck my cock' = redirect to handjob (face rule) — describe as manual penile stimulation, hands stroking cock\n"
-            "- 'kissing' / 'make out' = redirect to body kiss — lips on neck, chest, or shoulder\n"
-            "- 'cunnilingus' / 'eat me out' / 'lick my pussy' = redirect to fingering\n"
-            "- 'face-sitting' / 'sit on my face' = redirect to cowgirl/riding position\n"
-            "- 'handjob' / 'hand job' = a woman stroking/masturbating a man's erect penis with her hand — NOT massaging his hand\n"
-            "- Any phrase involving stroking, rubbing, pumping, gripping, or wrapping a hand around a cock/dick/penis = a handjob; describe it as manual penile stimulation, NOT a massage stroke\n"
-            "- In a massage context, 'stroking his dick/cock/penis' is sexual, not therapeutic — the therapist is masturbating the client\n"
-            "- 'erotic massage' / 'happy ending' / 'happy ending massage' = a massage session that concludes with sexual manual stimulation: if the recipient is male, the massage therapist strokes/masturbates his erect penis with her hand until he ejaculates (handjob); if the recipient is female, the therapist fingers her pussy until she orgasms. The therapist is typically clothed or partially clothed in massage attire, the client is on the massage table\n"
-            "- 'fingering' / 'masturbating' / 'touching herself' = one or more fingers inserted into or rubbing a woman's pussy/vagina and/or clit — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
-            "- 'rubbing your pussy' / 'touch yourself' / 'play with yourself' / 'rub yourself' / 'touch your pussy' / 'finger yourself' = solo female masturbation — the character stimulating her own pussy with her own hand; SOLO scene, NO cock, NO second person, NO other body parts in frame\n"
-            "- 'rubbing my pussy' / 'touching myself' / 'fingering myself' = same as above — solo self-stimulation\n"
-            "- 'dick/cock/penis in your ass' / 'anal' / 'anal sex' / 'fuck your ass' / 'ass fuck' / 'butt fuck' / 'take it in the ass' / 'up the ass' = anal penetration — the man's erect penis penetrating the woman's anus/ass. Describe explicitly: position (doggy style, bent over, lying face-down, reverse cowgirl anal with woman on top facing away), depth of penetration, her ass spread, cock buried in her ass. This is NSFW. Do NOT confuse with vaginal sex. The woman's face may be visible (especially when she is on top) — this is fine.\n"
-            "- A female customer/client does NOT have a penis or cock — NEVER assign male genitalia to a female character\n"
-            "- When the recipient of a happy ending is female: she is being fingered (her pussy stimulated by fingers), not given a handjob\n"
         )
-
-        # ── Random penis size injection ──
-        # If the scene depicts or implies a penis and no size is already stated,
-        # pick one so the LLM includes it naturally rather than leaving it vague.
-        # Female-client fingering scenes are excluded — no penis is involved.
-        _penis_scene_keywords = [
-            "penis", "cock", "dick", "erection", "erect",
-            "handjob", "hand job", "blowjob", "blow job", "fellatio",
-            "fucking", "intercourse", "penetrat", "cumshot", "facial",
-            "happy ending", "erotic massage", "sensual massage",
-            "anal", "ass fuck", "butt fuck", "in your ass", "in my ass",
-            "up the ass", "in the ass",
-            "__handjob_lora__",
-        ]
-        # If the scene is clearly about fingering a woman (no male recipient implied),
-        # do not inject a penis size.
-        _female_client_keywords = [
-            "finger her", "fingering her", "finger me", "fingering me",
-            "female client", "woman client", "her pussy", "my pussy",
-            "female customer", "woman customer", "lady client", "lady customer",
-            "female recipient", "woman recipient",
-        ]
-        _size_already_stated = [
-            "inch", "inches", '"', "big", "huge", "massive", "small", "tiny",
-            "thick", "thin", "large", "average", "girthy", "long cock",
-            "giant", "enormous", "sizeable",
-        ]
-        _penis_size_options = [
-            "average-sized cock",
-            "thick average cock",
-            "above-average, thick cock",
-            "long thick cock",
-            "thick 7-inch cock",
-            "long 8-inch cock",
-            "girthy cock",
-            "large thick cock",
-            "massive cock",
-        ]
-        anchor_and_history = (anchor + " " + history_text).lower()
-        _scene_has_penis = any(kw in anchor_and_history for kw in _penis_scene_keywords)
-        _female_client_scene = any(kw in anchor_and_history for kw in _female_client_keywords)
-        _size_specified = any(kw in anchor_and_history for kw in _size_already_stated)
-        _chosen_size = None
-        if _scene_has_penis and not _female_client_scene and not _size_specified:
-            _chosen_size = random.choice(_penis_size_options)
 
         if _context_only_mode:
             # No explicit scene — generate something inspired by the conversation mood/topic
@@ -7688,8 +7615,6 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             )
         else:
             user_content = f"Scene: {anchor}"
-            if _chosen_size:
-                user_content += f"\nPenis size for this scene: {_chosen_size} (not stated by user — weave into the prompt naturally)"
             if history_text.strip():
                 user_content += f"\n\nConversation context:\n{history_text.strip()}"
 
@@ -9245,13 +9170,8 @@ def _sanitize_image_description(description: str) -> str:
     return desc
 
 _FACE_CONTACT_TRIGGERS = [
-    "blowjob", "blow job", "suck my", "suck it", "suck you", "suck me",
-    "suck your cock", "suck your dick", "suck cock", "suck dick",
-    "give me head", "give you head", "go down on", "mouth on",
-    "lick my", "lick your", "lick me", "eat me out", "eat you out",
-    "cunnilingus", "face-sitting", "face sitting", "sit on my face",
     "kissing", "make out", "making out", "kiss me", "kiss you",
-    "lips on", "tongue on",
+    "kiss each other", "lips on", "tongue kissing", "french kiss",
 ]
 
 _FACE_CONTACT_REFUSALS = [
@@ -9439,64 +9359,6 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
             None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
         )
-
-    # Fallback toy prop injection: if the LLM missed a toy prop that's clearly in the
-    # conversation, append it so the dildo LoRA keyword check still fires.
-    if original_is_nsfw:
-        toy_keywords_check = ["dildo", "vibrator", "sex toy", "butt plug",
-                               "using a toy", "strap-on", "strapon"]
-        if not any(kw in prebuilt_prompt.lower() for kw in toy_keywords_check):
-            recent_msgs = list(conversations.get(chat_id, []))[-10:]
-            recent_text = " ".join(m.get("content", "") for m in recent_msgs).lower()
-            toy_terms = {
-                "dildo":    ["dildo", "dildos"],
-                "vibrator": ["vibrator", "vibrating", "vibe"],
-                "sex toy":  ["sex toy", "sex toys"],
-                "butt plug":["butt plug", "anal plug"],
-                "strap-on": ["strap-on", "strapon", "strap on"],
-            }
-            for prop, variants in toy_terms.items():
-                if any(v in recent_text for v in variants):
-                    prebuilt_prompt = f"{prebuilt_prompt}, using a {prop}"
-                    main_logger.info(f"[COMFYUI] Fallback toy prop appended to LLM prompt: '{prop}'")
-                    break
-
-    # Erotic massage / happy ending LoRA: scan conversation history for trigger context.
-    # If found and not already in clean_desc, inject a marker so generate_heather_image
-    # picks it up for LoRA injection regardless of what the LLM wrote in prebuilt_prompt.
-    if original_is_nsfw:
-        # Handjob / erotic massage (male recipient)
-        handjob_conv_triggers = [
-            "erotic massage", "sensual massage", "happy ending",
-            "hand job", "handjob", "jerk", "stroking",
-            "rubbing his cock", "rubbing his dick", "pumping his",
-            "gripping his cock", "gripping his dick", "wrapping her hand",
-            "her hand on his cock", "her hand around his",
-            "customer's dick", "customer's cock", "client's dick", "client's cock",
-        ]
-        if not any(kw in clean_desc.lower() for kw in handjob_conv_triggers):
-            recent_msgs_hj = list(conversations.get(chat_id, []))[-15:]
-            recent_text_hj = " ".join(m.get("content", "") for m in recent_msgs_hj).lower()
-            if any(kw in recent_text_hj for kw in handjob_conv_triggers):
-                clean_desc = f"{clean_desc} __handjob_lora__"
-                main_logger.info("[COMFYUI] Handjob LoRA marker injected from conversation context")
-
-        # Fingering / masturbation LoRA (female client OR self-masturbation)
-        fingering_conv_triggers = [
-            "fingering", "finger her", "finger me", "fingers her",
-            "fingered", "female client", "woman client",
-            "female customer", "woman customer", "lady client", "lady customer",
-            "masturbat", "touching herself", "fingering herself",
-            "playing with herself", "rubbing herself", "rubbing her pussy",
-            "touch yourself", "finger yourself", "play with yourself",
-            "rub yourself", "touch your pussy", "finger your pussy", "rub your pussy",
-        ]
-        if not any(kw in clean_desc.lower() for kw in fingering_conv_triggers):
-            recent_msgs_fg = list(conversations.get(chat_id, []))[-15:]
-            recent_text_fg = " ".join(m.get("content", "") for m in recent_msgs_fg).lower()
-            if any(kw in recent_text_fg for kw in fingering_conv_triggers):
-                clean_desc = f"{clean_desc} __pussygrab_lora__"
-                main_logger.info("[COMFYUI] Fingering/masturbation LoRA marker injected from conversation context")
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
