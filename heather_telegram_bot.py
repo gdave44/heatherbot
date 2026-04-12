@@ -7470,7 +7470,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         p = personality.personality
 
         # Strip conversational framing ("send me a picture of you wearing...")
-        anchor = _clean_photo_request(user_request)
+        _context_only_mode = (user_request == "__context_only__")
+        anchor = "" if _context_only_mode else _clean_photo_request(user_request)
 
         # ── Character physical description — provide BOTH versions; LLM picks based on rating ──
         phys = p.get('physical', {})
@@ -7663,11 +7664,20 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
         if _scene_has_penis and not _female_client_scene and not _size_specified:
             _chosen_size = random.choice(_penis_size_options)
 
-        user_content = f"Scene: {anchor}"
-        if _chosen_size:
-            user_content += f"\nPenis size for this scene: {_chosen_size} (not stated by user — weave into the prompt naturally)"
-        if history_text.strip():
-            user_content += f"\n\nConversation context:\n{history_text.strip()}"
+        if _context_only_mode:
+            # No explicit scene — generate something inspired by the conversation mood/topic
+            user_content = (
+                "The user just asked for a photo without specifying what they want. "
+                "Generate a scene that naturally fits the mood, topic, or last thing discussed "
+                "in the conversation below. Make it feel like a spontaneous in-character selfie.\n\n"
+                f"Conversation context (last 5 turns):\n{history_text.strip() or '(no history)'}"
+            )
+        else:
+            user_content = f"Scene: {anchor}"
+            if _chosen_size:
+                user_content += f"\nPenis size for this scene: {_chosen_size} (not stated by user — weave into the prompt naturally)"
+            if history_text.strip():
+                user_content += f"\n\nConversation context:\n{history_text.strip()}"
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -7696,7 +7706,13 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                 if first in ("NSFW", "SFW"):
                     is_nsfw = (first == "NSFW")
                     # Strip "Line 2+:" label from the start of the prompt body if present
-                    remaining = "\n".join(lines[1:]).strip().strip('"').strip("'")
+                    # Also truncate if the LLM output two rating sections (e.g. NSFW\n...\nSFW\n...)
+                    prompt_lines = []
+                    for _pl in lines[1:]:
+                        if _pl.strip().upper() in ("NSFW", "SFW"):
+                            break  # stop at any second rating line
+                        prompt_lines.append(_pl)
+                    remaining = "\n".join(prompt_lines).strip().strip('"').strip("'")
                     remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
                     if remaining and len(remaining) > 20:
                         _nsfw_tag = " nsfw=True |" if is_nsfw else ""
@@ -9368,9 +9384,20 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
 
     # Validate description before wasting GPU cycles
     clean_desc = _sanitize_image_description(description)
-    if not clean_desc:
-        main_logger.info(f"Invalid image description from {chat_id}, using fallback: {description[:50]}")
-        # Use a random NSFW or SFW selfie description instead
+    # Detect short/generic requests where we should generate from conversation context
+    _short_triggers = {
+        "send me a pic", "send a pic", "send me a photo", "send a photo",
+        "show me", "let me see", "send one", "take one", "snap one",
+        "pic please", "pic pls", "send pic", "send pics", "photo please",
+        "selfie please", "selfie?", "pic?", "pics?", "photo?",
+        "send nudes", "show me something", "surprise me",
+    }
+    _is_context_only = (not clean_desc or len(clean_desc) < 15 or
+                        description.lower().strip().rstrip('?!. ') in _short_triggers)
+    if _is_context_only:
+        clean_desc = "__context_only__"
+        main_logger.info(f"[COMFYUI] Short/generic request — will generate from conversation context")
+    elif not clean_desc:
         if _is_nsfw_context(description):
             clean_desc = random.choice(NSFW_SELFIE_DESCRIPTIONS)
         else:
@@ -9876,6 +9903,26 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 awaiting_image_description[chat_id] = False
                 awaiting_image_description_time.pop(chat_id, None)
             main_logger.info(f"Selfie description timeout for {chat_id}")
+
+    # Alteration request — "same but X", "change X to Y", "try again with X", etc.
+    # Must be checked before video/image so the plain text never hits the LLM chat path.
+    if _is_photo_alteration_request(user_message, chat_id):
+        if not can_send_photo_in_session(chat_id):
+            decline = get_photo_cap_decline(chat_id)
+            await context.bot.send_message(chat_id, decline)
+            store_message(chat_id, "Heather", decline)
+        elif _is_face_contact_photo_request(user_message):
+            loop = asyncio.get_running_loop()
+            refusal = await loop.run_in_executor(None, lambda: _get_face_contact_refusal(chat_id, user_message))
+            await context.bot.send_message(chat_id, refusal)
+            store_message(chat_id, "Heather", refusal)
+            if chat_id in conversations:
+                conversations[chat_id].append({"role": "assistant", "content": refusal})
+        else:
+            record_photo_sent(chat_id)
+            main_logger.info(f"[{request_id}] Alteration request from {chat_id}: {user_message[:60]}")
+            await generate_and_send_image_async(context.bot, chat_id, user_message)
+        return
 
     # Check for video request BEFORE image request (video is more specific,
     # and broad image triggers like "show me" / "can you send" would eat video requests)
