@@ -5118,8 +5118,9 @@ async def check_takeover_opportunity(chat_id: int, user_message: str):
     # Condition: User asked to meet up
     msg_lower = user_message.lower()
     meet_kw = ['meet up', 'meet you', 'can we meet', 'your address', 'where do you live',
-               'come visit', 'visit you', 'hang out', 'get together', 'come over']
-    if any(kw in msg_lower for kw in meet_kw):
+               'come visit', 'visit you', 'get together', 'come over',
+               'hang out with you', 'hang out together', 'hang out sometime', 'wanna hang']
+    if any(kw in msg_lower for kw in meet_kw) and not is_image_request(user_message):
         signal = f"Asked to meet up: '{user_message[:50]}'"
         _meetup_deflect_active[chat_id] = True
         main_logger.info(f"Meetup deflection flag set for {chat_id}")
@@ -7571,9 +7572,11 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "a sexual act, ignore the act and generate a nude or suggestive pose instead.\n"
             "- NSFW scenes show nudity only: bodies posed nude or partially nude — "
             "NOT performing any sexual act.\n"
-            "- MALE NUDITY: if a man is present in the scene and the scene is NSFW, "
-            "his penis may be visible and should be described as soft/flaccid unless the "
-            "scene explicitly implies otherwise. Use natural terms (cock, penis). "
+            "- MALE NUDITY: if a man is present in a nude scene, his penis is ALWAYS "
+            "described as soft/flaccid — never erect, never semi-erect, unless the scene "
+            "text explicitly uses the word 'erect' or 'erection'. 'Letting it all hang out', "
+            "'nudist', 'naked', 'nude' — all default to soft/flaccid. "
+            "Use natural terms (soft cock, flaccid penis). "
             "A visible flaccid penis is nudity, not a sexual act — it is valid.\n\n"
             "PROMPT RULES:\n"
             "- Comma-separated phrases, not prose sentences\n"
