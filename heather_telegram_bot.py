@@ -7544,7 +7544,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "  NSFW if the scene involves: nudity, exposed genitals/nipples, manual genital "
             "stimulation (fingering, handjob), oral sex, penetration, happy ending massage, "
             "or any erotic physical contact with genitals. Otherwise SFW.\n"
-            "- Remaining lines: the FLUX prompt (comma-separated phrases, 180-260 words)\n"
+            "- Remaining lines: the FLUX prompt (comma-separated phrases, 250-350 words)\n"
             "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
             "Scene: 'give me a blowjob' → redirected to handjob (face rule), NSFW prompt:\n"
             "NSFW\n"
@@ -7588,8 +7588,18 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- MOOD: include emotional/atmospheric phrases — e.g. 'sultry gaze', 'playful smirk', 'flushed cheeks', 'eyes half-closed', 'biting lower lip', 'relaxed and confident', 'tense anticipation'\n"
             "- ENVIRONMENT: describe the full background — furniture, surfaces, objects in frame, wall color/texture, window light, time of day feel\n"
             "- SKIN AND BODY: include skin texture phrases, muscle definition, curves, visible details — e.g. 'visible collarbone', 'slight curve of hip', 'toned stomach', 'natural skin texture with subtle imperfections'\n"
-            "- For SFW: describe outfit fully (fabric, fit, cut, color), makeup, hair state (loose, tied, messy), accessories, how clothing fits the body\n"
-            "- For NSFW: describe the sex act in explicit physical detail — body parts involved, how they are touching/penetrating/stroking, angle and depth, rhythm implied; describe arousal state (wetness, erection, flushed skin); describe what each person's hands and body are doing; do not euphemize or summarize\n"
+            "- CLOTHING DETAIL (required for any scene where clothing is visible): describe every garment with — "
+            "color (specific: 'dusty rose', 'deep navy', not just 'pink' or 'blue'), "
+            "fabric/texture (silk, ribbed cotton, sheer chiffon, distressed denim, lace trim, satin sheen), "
+            "cut/silhouette (fitted, flowy, wrap-style, plunging V-neck, off-shoulder, cropped, high-waisted), "
+            "fit on the body (hugging curves, loose and draped, clinging to hips, gaping slightly at chest), "
+            "and visible details (buttons, zipper, seams, hem length, straps, neckline shape)\n"
+            "- For SFW: cover all visible clothing in the above detail; add makeup (lip color, eye look), "
+            "hair state (loose waves, messy bun, pulled back with strands falling), accessories (jewelry, bag, shoes)\n"
+            "- For NSFW: describe clothing state (what is removed, pushed aside, pulled down, bunched at waist); "
+            "describe the sex act in explicit physical detail — body parts involved, how they are touching/"
+            "penetrating/stroking, angle and depth, rhythm implied; describe arousal state (wetness, erection, "
+            "flushed skin); describe what each person's hands and body are doing; do not euphemize or summarize\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- If NSFW: use the Chest (NSFW) description; describe nudity and anatomy directly and explicitly — use words like pussy, cock, vagina, penis, clit, nipples; do NOT substitute euphemisms like 'sensitive area', 'intimate spot', 'private parts'\n"
             "- If SFW: use the Chest (SFW) description; keep the scene clothed/tasteful\n"
@@ -7688,7 +7698,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 550,
+                "max_tokens": 700,
                 "stream": False,
             },
             timeout=20,
@@ -9354,7 +9364,7 @@ def _build_alteration_prompt(chat_id: int, user_request: str, previous_prompt: s
                     {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.7,
-                "max_tokens": 550,
+                "max_tokens": 700,
                 "stream": False,
             },
             timeout=20,
