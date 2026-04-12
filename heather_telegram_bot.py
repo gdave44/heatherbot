@@ -7561,7 +7561,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "SFW/NSFW CLASSIFICATION — read the Scene text only, ignore conversation history:\n"
             "Ask: does the Scene text, word for word, describe nudity or a sexual act happening?\n"
             "- NSFW = the Scene text explicitly shows: exposed genitals/nipples, or a sexual act "
-            "in progress (oral sex, penetration, manual genital stimulation, masturbation)\n"
+            "in progress (oral sex, vaginal penetration, anal penetration, manual genital stimulation, masturbation)\n"
             "- SFW = everything that does not meet the above. Conversation history NEVER changes this.\n"
             "- 'at the grocery store' → SFW. 'at the park' → SFW. 'at home' → SFW.\n"
             "- 'massage' → SFW. 'giving a happy ending' → NSFW. 'erotic massage' → NSFW.\n"
@@ -7628,6 +7628,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- 'fingering' / 'masturbating' / 'touching herself' = one or more fingers inserted into or rubbing a woman's pussy/vagina and/or clit — describe this explicitly using anatomical terms (pussy, vagina, clit, labia), NOT vague euphemisms like 'sensitive spots' or 'intimate area'\n"
             "- 'rubbing your pussy' / 'touch yourself' / 'play with yourself' / 'rub yourself' / 'touch your pussy' / 'finger yourself' = solo female masturbation — the character stimulating her own pussy with her own hand; SOLO scene, NO cock, NO second person, NO other body parts in frame\n"
             "- 'rubbing my pussy' / 'touching myself' / 'fingering myself' = same as above — solo self-stimulation\n"
+            "- 'dick/cock/penis in your ass' / 'anal' / 'anal sex' / 'fuck your ass' / 'ass fuck' / 'butt fuck' / 'take it in the ass' / 'up the ass' = anal penetration — the man's erect penis penetrating the woman's anus/ass. Describe explicitly: position (doggy style, bent over, lying face-down, reverse cowgirl anal), depth of penetration, her ass spread, cock buried in her ass. This is NSFW. Do NOT confuse with vaginal sex.\n"
+            "- Anal scenes do NOT involve the face — they are valid NSFW scenes and must not be deflected or avoided\n"
             "- A female customer/client does NOT have a penis or cock — NEVER assign male genitalia to a female character\n"
             "- When the recipient of a happy ending is female: she is being fingered (her pussy stimulated by fingers), not given a handjob\n"
         )
@@ -7641,6 +7643,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "handjob", "hand job", "blowjob", "blow job", "fellatio",
             "fucking", "intercourse", "penetrat", "cumshot", "facial",
             "happy ending", "erotic massage", "sensual massage",
+            "anal", "ass fuck", "butt fuck", "in your ass", "in my ass",
+            "up the ass", "in the ass",
             "__handjob_lora__",
         ]
         # If the scene is clearly about fingering a woman (no male recipient implied),
