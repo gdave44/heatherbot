@@ -1,0 +1,184 @@
+{
+  "_workflow_meta": {
+    "base_model": "pony",
+    "compatible_lora_bases": ["pony"],
+    "positive_prompt_node": "5",
+    "negative_prompt_node": "6",
+    "final_output_node": "9",
+    "face_image_node": "13",
+    "guidance_node": null,
+    "sampler_nodes": ["4"],
+    "sampler_node": "4",
+    "checkpoint_node": "2",
+    "lora_inject_start": 20,
+    "latent_node": "7",
+    "vae_decode_node": "8",
+    "face_swap_nodes": ["13", "12", "14", "15", "16", "18"],
+    "model_rewire_nodes": [],
+    "prompt_prefix": "score_9, score_8_up, score_7_up, realistic, high quality, real life photo, raw, film grain, "
+  },
+  "2": {
+    "inputs": {
+      "lora_01": "None",
+      "strength_01": 1,
+      "lora_02": "None",
+      "strength_02": 1,
+      "lora_03": "None",
+      "strength_03": 1,
+      "lora_04": "None",
+      "strength_04": 1,
+      "model": ["11", 0],
+      "clip": ["11", 1]
+    },
+    "class_type": "Lora Loader Stack (rgthree)",
+    "_meta": { "title": "LoRA Stack" }
+  },
+  "4": {
+    "inputs": {
+      "seed": 420807318925640,
+      "steps": 20,
+      "cfg": 8,
+      "sampler_name": "heunpp2",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": ["2", 0],
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "latent_image": ["7", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
+  },
+  "5": {
+    "inputs": {
+      "text": "score_9, score_8_up, score_7_up, realistic, high quality, real life photo, raw, film grain, photo of a woman, natural lighting, amateur photo",
+      "clip": ["2", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Positive Prompt" }
+  },
+  "6": {
+    "inputs": {
+      "text": "(3d, render, cgi, doll, painting, fake, 3d modeling:1.4), (worst quality, low quality:1.4), old, deformed, malformed, bad hands, bad fingers, bad eyes, bad teeth, long body, blurry, duplicated, cloned, duplicate body parts, disfigured, extra limbs, fused fingers, extra fingers, twisted, distorted, malformed hands, malformed fingers, mutated hands and fingers, conjoined, missing limbs, bad anatomy, bad proportions, logo, watermark, text, lowres, mutated, mutilated, blend, artifacts, gross, ugly",
+      "clip": ["2", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Negative Prompt" }
+  },
+  "7": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "8": {
+    "inputs": {
+      "samples": ["4", 0],
+      "vae": ["11", 2]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI_Pony",
+      "images": ["15", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Final Image" }
+  },
+  "11": {
+    "inputs": {
+      "ckpt_name": "CyberRealisticPony_V16.0_FP16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Load Checkpoint" }
+  },
+  "12": {
+    "inputs": {
+      "enabled": true,
+      "swap_model": "inswapper_128.onnx",
+      "facedetection": "YOLOv5l",
+      "face_restore_model": "none",
+      "face_restore_visibility": 1,
+      "codeformer_weight": 0.5,
+      "detect_gender_input": "no",
+      "detect_gender_source": "no",
+      "input_faces_index": "0",
+      "source_faces_index": "0",
+      "console_log_level": 1,
+      "input_image": ["8", 0],
+      "source_image": ["13", 0]
+    },
+    "class_type": "ReActorFaceSwap",
+    "_meta": { "title": "ReActor Face Swap" }
+  },
+  "13": {
+    "inputs": {
+      "image": "heather_face.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Face Source Photo" }
+  },
+  "14": {
+    "inputs": {
+      "images": ["12", 2]
+    },
+    "class_type": "PreviewImage",
+    "_meta": { "title": "Preview Face Swap Mask" }
+  },
+  "15": {
+    "inputs": {
+      "seed": 1707878818,
+      "resolution": 1080,
+      "max_resolution": 0,
+      "batch_size": 5,
+      "uniform_batch_size": false,
+      "color_correction": "lab",
+      "temporal_overlap": 0,
+      "prepend_frames": 0,
+      "input_noise_scale": 0,
+      "latent_noise_scale": 0,
+      "offload_device": "cpu",
+      "enable_debug": false,
+      "image": ["12", 0],
+      "dit": ["16", 0],
+      "vae": ["18", 0]
+    },
+    "class_type": "SeedVR2VideoUpscaler",
+    "_meta": { "title": "SeedVR2 Upscaler" }
+  },
+  "16": {
+    "inputs": {
+      "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+      "device": "cuda:0",
+      "blocks_to_swap": 0,
+      "swap_io_components": false,
+      "offload_device": "none",
+      "cache_model": false,
+      "attention_mode": "sdpa"
+    },
+    "class_type": "SeedVR2LoadDiTModel",
+    "_meta": { "title": "SeedVR2 DiT" }
+  },
+  "18": {
+    "inputs": {
+      "model": "ema_vae_fp16.safetensors",
+      "device": "cuda:0",
+      "encode_tiled": false,
+      "encode_tile_size": 1024,
+      "encode_tile_overlap": 128,
+      "decode_tiled": false,
+      "decode_tile_size": 1024,
+      "decode_tile_overlap": 128,
+      "tile_debug": "false",
+      "offload_device": "none",
+      "cache_model": false
+    },
+    "class_type": "SeedVR2LoadVAEModel",
+    "_meta": { "title": "SeedVR2 VAE" }
+  }
+}

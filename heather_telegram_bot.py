@@ -6620,6 +6620,8 @@ _WF_FACE_SWAP_NODES     = _WF_META.get("face_swap_nodes", ["10", "11", "13", "14
 # Extra [node_id, input_key] pairs whose model input should be rewired after LoRA injection.
 # Needed for workflows where multiple nodes (e.g. CFGGuider, BasicScheduler) reference the model.
 _WF_MODEL_REWIRE_NODES  = _WF_META.get("model_rewire_nodes", [])
+# Model-specific quality token prefix prepended to every positive prompt (e.g. Pony score tags)
+_WF_PROMPT_PREFIX       = _WF_META.get("prompt_prefix", "")
 # For ControlNet positive input: use guidance node if present, else positive prompt node
 _WF_CONTROLNET_POS_NODE = _WF_META.get("controlnet_positive_node",
                                         _WF_GUIDANCE_NODE if _WF_GUIDANCE_NODE else POSITIVE_PROMPT_NODE)
@@ -7737,6 +7739,11 @@ def generate_heather_image(user_description: str, progress_callback=None, is_nsf
         full_prompt = f"{prebuilt_prompt}{quality_suffix}"
     else:
         full_prompt = build_heather_prompt(user_description, is_nsfw=is_nsfw)
+
+    # Prepend model-specific quality token prefix (e.g. Pony score tags).
+    # This is a no-op for workflows that don't set prompt_prefix in _workflow_meta.
+    if _WF_PROMPT_PREFIX:
+        full_prompt = f"{_WF_PROMPT_PREFIX}{full_prompt}"
 
     # Post-process: replace any erect penis descriptors with flaccid equivalents.
     # The LLM sometimes ignores the instruction — this is the hard enforcement layer.
