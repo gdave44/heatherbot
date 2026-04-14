@@ -123,6 +123,7 @@ COMFYUI_URL = build_service_url("COMFYUI_URL", args.comfyui_port)
 TEXT_AI_ENDPOINT = f"{LLM_URL}/v1/chat/completions"
 
 MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
+VISION_MODEL_NAME = os.getenv("VISION_MODEL", "llava:7b-v1.6-mistral-q4_0")
 
 if not BOT_TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN must be set in .env or environment")
@@ -6581,7 +6582,7 @@ def get_detailed_image_description(image_data: bytes) -> tuple[bool, str]:
             response = requests.post(
                 f'{IMAGE_AI_ENDPOINT}/api/generate',
                 json={
-                    'model': 'llava:7b-v1.6-mistral-q4_0',
+                    'model': VISION_MODEL_NAME,
                     'prompt': describe_prompt,
                     'images': [image_base64],
                     'stream': False,
