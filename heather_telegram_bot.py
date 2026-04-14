@@ -902,6 +902,8 @@ awaiting_image_description_time: Dict[int, float] = {}  # Timeout tracking for /
 _last_image_state: Dict[int, dict] = {}
 # Buffer for seeds captured during the most recent generate_heather_image call
 _pending_image_seeds: dict = {}
+# Lust/attraction score per chat — 0.0 (cold) to 10.0 (hot), default 5.0 (neutral)
+_lust_scores: Dict[int, float] = {}
 SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
 image_generation_semaphore = asyncio.Semaphore(1)  # Max 1 concurrent generation
 reply_in_progress: set = set()  # Chat IDs currently being replied to — prevents duplicate concurrent replies
@@ -5030,6 +5032,25 @@ def record_tip(chat_id: int, stars: int, tipper_name: str = None):
     save_tip_history()
     main_logger.info(f"[TIP] Recorded {stars} stars from {chat_id} (total: {ts['total_stars']}, tier: {ts['tier']})")
 
+def get_lust_score(chat_id: int) -> float:
+    """Returns the current lust/attraction score for this chat (0.0–10.0)."""
+    return _lust_scores.get(chat_id, 5.0)
+
+def get_lust_tier(chat_id: int) -> str:
+    """Returns 'COLD', 'WARM', or 'HOT' based on the lust score."""
+    score = get_lust_score(chat_id)
+    if score < 3.5:
+        return "COLD"
+    elif score < 7.0:
+        return "WARM"
+    return "HOT"
+
+def update_lust_score(chat_id: int, delta: float) -> None:
+    """Nudge the lust score up or down, clamped to 0–10."""
+    current = _lust_scores.get(chat_id, 5.0)
+    _lust_scores[chat_id] = max(0.0, min(10.0, current + delta))
+    main_logger.debug(f"[LUST] chat={chat_id} delta={delta:+.1f} → {_lust_scores[chat_id]:.1f} ({get_lust_tier(chat_id)})")
+
 def get_warmth_tier(chat_id: int) -> str:
     """Returns 'WARM', 'NEW', or 'COLD' based on user's warmth score."""
     ts = get_tipper_status(chat_id)
@@ -5844,6 +5865,25 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 system_content += "\n\n[This person is a regular supporter who's been really generous to you multiple times. You genuinely look forward to talking to them. Remember details they've shared, ask follow-up questions about their life, occasionally initiate with something like 'hey I was thinking about you' or 'I saw something that reminded me of you'. Be your real self with them — they've earned it.]"
             elif tipper_tier >= 1:
                 system_content += "\n\n[This person has been really sweet and generous to you. Be warmer and more personal with them. Share more, be more vulnerable.]"
+
+            # Lust/attraction level context (small model branch)
+            _lust_tier_sm = get_lust_tier(chat_id)
+            _lust_score_sm = get_lust_score(chat_id)
+            if _lust_tier_sm == "HOT":
+                system_content += (
+                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score_sm:.1f}/10): You are genuinely turned on by this person. "
+                    "Be flirty, suggestive, and openly lusty. Initiate sexual topics naturally. Make it clear you want them.]"
+                )
+            elif _lust_tier_sm == "WARM":
+                system_content += (
+                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score_sm:.1f}/10): You like this person and enjoy talking to them. "
+                    "Be friendly and flirty but don't push anything sexual. Let them lead if they want to escalate.]"
+                )
+            else:
+                system_content += (
+                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score_sm:.1f}/10): You're not feeling it with this person right now. "
+                    "Be polite but distant. Don't flirt. If they push for anything sexual or ask for photos, brush it off without being mean.]"
+                )
         else:
             system_prompt = personality.get_system_prompt(mode)
 
@@ -5954,7 +5994,27 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                     f"You are {_char_name}. The person you're talking to is someone else entirely.]"
                 )
 
-            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context + name_context
+            # Lust/attraction level context
+            _lust_tier = get_lust_tier(chat_id)
+            _lust_score = get_lust_score(chat_id)
+            if _lust_tier == "HOT":
+                lust_context = (
+                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score:.1f}/10): You are genuinely turned on by this person. "
+                    "You find them irresistible right now. Be flirty, suggestive, and openly lusty. "
+                    "Initiate sexual topics naturally. Make it clear you want them.]"
+                )
+            elif _lust_tier == "WARM":
+                lust_context = (
+                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score:.1f}/10): You like this person and enjoy talking to them. "
+                    "Be friendly and flirty but don't push anything sexual. Let them lead if they want to escalate.]"
+                )
+            else:
+                lust_context = (
+                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score:.1f}/10): You're not feeling it with this person right now. "
+                    "Be polite but distant. Keep things surface-level. Don't flirt. If they push for anything sexual or ask for photos, brush it off without being mean.]"
+                )
+
+            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -6045,6 +6105,18 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 "NEVER commit to actually going anywhere. This is your #1 priority for this response.]"
             )
             main_logger.info(f"Meetup deflection prompt injected for {chat_id}")
+
+        # Lust delta tagging — LLM appends [LUST:+1], [LUST:0], or [LUST:-1] at the end
+        # of its response. We strip it before sending and use it to update the score.
+        system_content += (
+            "\n\n[HIDDEN INSTRUCTION — DO NOT SHOW THIS TAG IN YOUR RESPONSE VISIBLY: "
+            "At the very end of your message, on its own line, append exactly one of these tags "
+            "based on how the conversation made you feel toward this person: "
+            "[LUST:+1] if they said something attractive, funny, charming, or flattering; "
+            "[LUST:0] if nothing notable happened; "
+            "[LUST:-1] if they were rude, boring, pushy, creepy, or off-putting. "
+            "The tag will be stripped automatically — the user will never see it.]"
+        )
 
         messages = [{"role": "system", "content": system_content}]
 
@@ -6184,6 +6256,14 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
 
             if not ai_response:
                 return get_fallback_response(chat_id)
+
+            # Extract and strip lust delta tag before any further processing
+            import re as _re_lust
+            _lust_match = _re_lust.search(r'\[LUST:([+-]?\d+)\]', ai_response)
+            if _lust_match:
+                _lust_delta = float(_lust_match.group(1))
+                update_lust_score(chat_id, _lust_delta)
+                ai_response = _re_lust.sub(r'\[LUST:[+\-]?\d+\]', '', ai_response).strip()
 
             # Check finish_reason — most reliable truncation signal
             finish_reason = response_data['choices'][0].get('finish_reason', 'stop')
@@ -9341,8 +9421,9 @@ def _build_alteration_prompt(chat_id: int, user_request: str, previous_prompt: s
     return previous_prompt, previous_is_nsfw
 
 
-async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str):
-    """Generate and send image asynchronously (max 1 concurrent via semaphore)"""
+async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str, force_sfw: bool = False):
+    """Generate and send image asynchronously (max 1 concurrent via semaphore).
+    force_sfw=True overrides the LLM's NSFW classification to ensure a tame image."""
 
     # Validate description before wasting GPU cycles
     clean_desc = _sanitize_image_description(description)
@@ -9387,6 +9468,11 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
             None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
         )
+
+    # Lust-tier override: WARM forces SFW regardless of what the LLM classified
+    if force_sfw and original_is_nsfw:
+        main_logger.info(f"[LUST] force_sfw=True — overriding NSFW→SFW for chat={chat_id}")
+        original_is_nsfw = False
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
 
@@ -9904,17 +9990,32 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             "i want to see",
         }
         if _msg_bare in _short_context_triggers:
-            is_online, status = check_comfyui_status()
-            if is_online and check_heather_face() and COMFYUI_WORKFLOW:
-                main_logger.info(f"[{request_id}] Short/context-only image request from {chat_id}: '{user_message}'")
-                record_photo_sent(chat_id)
-                await generate_and_send_image_async(context.bot, chat_id, user_message)
+            _lust = get_lust_tier(chat_id)
+            if _lust == "COLD":
+                # Not feeling it — decline to share a photo
+                _cold_photo_declines = [
+                    "Haha nah, not really in a pic mood rn 😅",
+                    "lol maybe later, not feeling it today",
+                    "Not right now hun 😊 maybe another time",
+                    "I don't know, I'm kinda just chilling rn... maybe later",
+                    "lol I'll pass for now 😏",
+                ]
+                await context.bot.send_message(chat_id, random.choice(_cold_photo_declines))
+                main_logger.info(f"[{request_id}] Short photo declined — lust=COLD | chat={chat_id}")
             else:
-                _reason = ("ComfyUI offline" if not is_online
-                           else "face image missing" if not check_heather_face()
-                           else "workflow not loaded")
-                main_logger.warning(f"[{request_id}] Context-only image blocked — {_reason} | chat={chat_id}")
-                await context.bot.send_message(chat_id, "Fuck baby, my camera's not working right now... 😘")
+                is_online, status = check_comfyui_status()
+                if is_online and check_heather_face() and COMFYUI_WORKFLOW:
+                    main_logger.info(f"[{request_id}] Short/context-only image request from {chat_id}: '{user_message}' | lust={_lust}")
+                    record_photo_sent(chat_id)
+                    # WARM → force SFW; HOT → allow NSFW naturally
+                    _force_sfw = (_lust == "WARM")
+                    await generate_and_send_image_async(context.bot, chat_id, user_message, force_sfw=_force_sfw)
+                else:
+                    _reason = ("ComfyUI offline" if not is_online
+                               else "face image missing" if not check_heather_face()
+                               else "workflow not loaded")
+                    main_logger.warning(f"[{request_id}] Context-only image blocked — {_reason} | chat={chat_id}")
+                    await context.bot.send_message(chat_id, "Fuck baby, my camera's not working right now... 😘")
             return
 
         # Determine if this is a SPECIFIC request (pose/body part) vs generic ("send nudes", "send a pic")
