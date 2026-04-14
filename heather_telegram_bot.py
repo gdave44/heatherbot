@@ -2923,6 +2923,10 @@ CHARACTER_VIOLATIONS_FALLBACK = [
     "ethical guidelines", "ethical boundaries", "professional boundaries",
     "i have to decline", "i have to refuse", "i must decline",
     "family dynamics", "inappropriate content", "harmful content",
+    # AI assistant identity leak — model thinks it's a helpful assistant
+    "i'm here to help", "i am here to help", "here to assist",
+    "let's keep things professional", "keep it professional",
+    "i need to maintain", "as an ai", "as a language",
     # Infrastructure leak phrases
     "dolphin", "mistral", "hermes", "llama", "ollama", "comfyui",
     "lm studio", "llama.cpp", "llama-server", "gguf",
@@ -6281,6 +6285,22 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                     main_logger.info(f"Salvaged finish_reason=length response: {ai_response[:80]}")
                 else:
                     return get_fallback_response(chat_id)
+
+            # Check if the model addressed the user by the character's own name
+            # (e.g. "That's flattering, Heather" — model confused user with persona)
+            _char_name_lower = personality.name.lower()
+            _name_address_patterns = [
+                rf'\b{re.escape(_char_name_lower)}\b[,!]',    # "heather," / "heather!"
+                rf'[,!]\s*{re.escape(_char_name_lower)}\b',   # ", heather" / "! heather"
+                rf'^{re.escape(_char_name_lower)}\b',          # response starts with own name
+            ]
+            _addressed_as_self = any(re.search(p, ai_response.lower()) for p in _name_address_patterns)
+            if not redteam and _addressed_as_self:
+                main_logger.warning(f"Name confusion (attempt {retry_count+1}/3) — model addressed user as '{personality.name}': {ai_response[:200]}")
+                if retry_count < 2:
+                    return get_text_ai_response(chat_id, user_message, retry_count + 1, redteam=redteam, request_id=request_id)
+                # Strip the errant name reference as a last resort
+                ai_response = re.sub(rf'\b{re.escape(personality.name)}\b[,!]?\s*', '', ai_response, flags=re.IGNORECASE).strip()
 
             if not redteam and contains_character_violation(ai_response):
                 # Find which phrase triggered the violation
