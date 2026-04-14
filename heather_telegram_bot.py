@@ -6595,7 +6595,7 @@ def get_detailed_image_description(image_data: bytes) -> tuple[bool, str]:
             ollama_health.record_success()
             result = response.json()
             description = result.get('response', '')
-            description = description[:300]  # Truncate to prevent oversized descriptions
+            description = description[:800]  # Truncate to prevent oversized descriptions
 
             # Check for prompt injection in LLaVA output (white-on-white text attacks)
             injection_check = detect_prompt_injection(description, chat_id=0)
