@@ -8476,6 +8476,7 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo_send_times[chat_id] = []    # Reset photo cap counter
     _context_photo_next_trigger.pop(chat_id, None)  # Reset context photo trigger
     _context_photo_last_sent.pop(chat_id, None)
+    _lust_scores.pop(chat_id, None)   # Reset lust score to default (5.0)
     # Delete persisted conversation file so it doesn't reload on next restart
     conv_file = os.path.join(CONVERSATIONS_DIR, f"{chat_id}.json")
     try:
@@ -9048,6 +9049,36 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args or []
+
+    # ── lust subcommand ─────────────────────────────────────────────────────
+    # /hubaloo lust <0-10> [chat_id]  — directly set the lust score
+    if args and args[0].lower() == "lust":
+        lust_args = args[1:]
+        lust_target = chat_id
+        try:
+            if len(lust_args) >= 2:
+                lust_val = float(lust_args[0])
+                lust_target = int(lust_args[1])
+            elif len(lust_args) == 1:
+                lust_val = float(lust_args[0])
+            else:
+                await context.bot.send_message(chat_id, "Usage: /hubaloo lust <0-10> [chat_id]")
+                return
+        except ValueError:
+            await context.bot.send_message(chat_id, "Usage: /hubaloo lust <0-10> [chat_id]")
+            return
+
+        lust_val = max(0.0, min(10.0, lust_val))
+        _lust_scores[lust_target] = lust_val
+        tier = get_lust_tier(lust_target)
+        await context.bot.send_message(
+            chat_id,
+            f"✅ Lust score for chat {lust_target} set to {lust_val:.1f}/10 → tier: {tier}"
+        )
+        main_logger.info(f"[CHEAT] /hubaloo lust: set {lust_target} → {lust_val:.1f} ({tier})")
+        return
+
+    # ── tip subcommand (original behavior) ──────────────────────────────────
     # Strip "tip" keyword if present
     stripped = [a for a in args if a.lower() != "tip"]
 
