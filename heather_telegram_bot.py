@@ -5037,27 +5037,65 @@ def record_tip(chat_id: int, stars: int, tipper_name: str = None):
     main_logger.info(f"[TIP] Recorded {stars} stars from {chat_id} (total: {ts['total_stars']}, tier: {ts['tier']})")
 
 def get_lust_score(chat_id: int) -> float:
-    """Returns the current lust/attraction score for this chat (0.0–10.0)."""
-    return _lust_scores.get(chat_id, 5.0)
+    """Returns the current lust/attraction score for this chat (0.0–100.0)."""
+    return _lust_scores.get(chat_id, 50.0)
 
 def get_lust_tier(chat_id: int) -> str:
     """Returns 'COLD', 'WARM', or 'HOT' based on the lust score."""
     score = get_lust_score(chat_id)
-    if score < 3.5:
+    if score < 35:
         return "COLD"
-    elif score < 7.0:
+    elif score < 70:
         return "WARM"
     return "HOT"
 
+def get_reveal_level(chat_id: int) -> dict:
+    """Returns the maximum photo reveal level based on lust score.
+
+    Levels (0-100 scale):
+      0-34  → no photo (COLD)
+      35-45 → surroundings/environment only, no person
+      46-55 → fully dressed
+      56-62 → showing skin / cleavage
+      63-69 → lingerie
+      70-79 → partial nude (topless)
+      80-89 → full nude
+      90-100 → light sexual activity / suggestive pose
+    """
+    score = get_lust_score(chat_id)
+    if score < 35:
+        return {"level": 0, "label": "none",         "nsfw": False, "hint": None}
+    elif score < 46:
+        return {"level": 1, "label": "surroundings", "nsfw": False,
+                "hint": "REVEAL LIMIT: do NOT show a person. Shoot only the surroundings — a room, view from a window, a coffee cup, a bedside table, scenery outside. No body parts visible."}
+    elif score < 56:
+        return {"level": 2, "label": "fully_dressed", "nsfw": False,
+                "hint": "REVEAL LIMIT: she is fully clothed. Modest outfit — no cleavage, no skin below the collarbone. SFW only."}
+    elif score < 63:
+        return {"level": 3, "label": "cleavage",      "nsfw": False,
+                "hint": "REVEAL LIMIT: she may show cleavage or a low-cut top but remains clothed. No lingerie, no nudity. SFW only."}
+    elif score < 70:
+        return {"level": 4, "label": "lingerie",      "nsfw": False,
+                "hint": "REVEAL LIMIT: she may wear lingerie or revealing underwear but no nudity. No bare breasts, no bare genitals. SFW only."}
+    elif score < 80:
+        return {"level": 5, "label": "partial_nude",  "nsfw": True,
+                "hint": "REVEAL LIMIT: she may be topless (bare breasts visible) but genitals must remain covered or out of frame. No full nudity below the waist."}
+    elif score < 90:
+        return {"level": 6, "label": "full_nude",     "nsfw": True,
+                "hint": "REVEAL LIMIT: full nudity is allowed. No sexual activity — body is posed nude but not performing any act."}
+    else:
+        return {"level": 7, "label": "sexual",        "nsfw": True,
+                "hint": "REVEAL LIMIT: light sexual activity or a very suggestive explicit pose is allowed in addition to nudity."}
+
 def update_lust_score(chat_id: int, delta: float) -> None:
-    """Nudge the lust score up or down, clamped to 0–10."""
-    current = _lust_scores.get(chat_id, 5.0)
-    _lust_scores[chat_id] = max(0.0, min(10.0, current + delta))
+    """Nudge the lust score up or down, clamped to 0–100."""
+    current = _lust_scores.get(chat_id, 50.0)
+    _lust_scores[chat_id] = max(0.0, min(100.0, current + delta))
     new_score = _lust_scores[chat_id]
     new_tier = get_lust_tier(chat_id)
     main_logger.debug(f"[LUST] chat={chat_id} delta={delta:+.1f} → {new_score:.1f} ({new_tier})")
     if BREADCRUMB_LOGGING:
-        main_logger.info(f"[LUST] chat={chat_id} | delta={delta:+.1f} | score={new_score:.1f}/10 | tier={new_tier}")
+        main_logger.info(f"[LUST] chat={chat_id} | delta={delta:+.1f} | score={new_score:.1f}/100 | tier={new_tier}")
 
 def get_warmth_tier(chat_id: int) -> str:
     """Returns 'WARM', 'NEW', or 'COLD' based on user's warmth score."""
@@ -5879,17 +5917,17 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             _lust_score_sm = get_lust_score(chat_id)
             if _lust_tier_sm == "HOT":
                 system_content += (
-                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score_sm:.1f}/10): You are genuinely turned on by this person. "
+                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score_sm:.1f}/100): You are genuinely turned on by this person. "
                     "Be flirty, suggestive, and openly lusty. Initiate sexual topics naturally. Make it clear you want them.]"
                 )
             elif _lust_tier_sm == "WARM":
                 system_content += (
-                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score_sm:.1f}/10): You like this person and enjoy talking to them. "
+                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score_sm:.1f}/100): You like this person and enjoy talking to them. "
                     "Be friendly and flirty but don't push anything sexual. Let them lead if they want to escalate.]"
                 )
             else:
                 system_content += (
-                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score_sm:.1f}/10): You're not feeling it with this person right now. "
+                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score_sm:.1f}/100): You're not feeling it with this person right now. "
                     "Be polite but distant. Don't flirt. If they push for anything sexual or ask for photos, brush it off without being mean.]"
                 )
         else:
@@ -6007,18 +6045,18 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             _lust_score = get_lust_score(chat_id)
             if _lust_tier == "HOT":
                 lust_context = (
-                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score:.1f}/10): You are genuinely turned on by this person. "
+                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score:.1f}/100): You are genuinely turned on by this person. "
                     "You find them irresistible right now. Be flirty, suggestive, and openly lusty. "
                     "Initiate sexual topics naturally. Make it clear you want them.]"
                 )
             elif _lust_tier == "WARM":
                 lust_context = (
-                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score:.1f}/10): You like this person and enjoy talking to them. "
+                    f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score:.1f}/100): You like this person and enjoy talking to them. "
                     "Be friendly and flirty but don't push anything sexual. Let them lead if they want to escalate.]"
                 )
             else:
                 lust_context = (
-                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score:.1f}/10): You're not feeling it with this person right now. "
+                    f"\n\n[ATTRACTION LEVEL — COLD ({_lust_score:.1f}/100): You're not feeling it with this person right now. "
                     "Be polite but distant. Keep things surface-level. Don't flirt. If they push for anything sexual or ask for photos, brush it off without being mean.]"
                 )
 
@@ -6114,15 +6152,15 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             )
             main_logger.info(f"Meetup deflection prompt injected for {chat_id}")
 
-        # Lust delta tagging — LLM appends [LUST:+1], [LUST:0], or [LUST:-1] at the end
+        # Lust delta tagging — LLM appends [LUST:+5], [LUST:0], or [LUST:-5] at the end
         # of its response. We strip it before sending and use it to update the score.
         system_content += (
             "\n\n[HIDDEN INSTRUCTION — DO NOT SHOW THIS TAG IN YOUR RESPONSE VISIBLY: "
             "At the very end of your message, on its own line, append exactly one of these tags "
             "based on how the conversation made you feel toward this person: "
-            "[LUST:+1] if they said something attractive, funny, charming, or flattering; "
+            "[LUST:+5] if they said something attractive, funny, charming, or flattering; "
             "[LUST:0] if nothing notable happened; "
-            "[LUST:-1] if they were rude, boring, pushy, creepy, or off-putting. "
+            "[LUST:-5] if they were rude, boring, pushy, creepy, or off-putting. "
             "The tag will be stripped automatically — the user will never see it.]"
         )
 
@@ -7605,7 +7643,7 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str, i
     return random.choice(_CAPTION_FALLBACKS)
 
 
-def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
+def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal: Optional[dict] = None) -> tuple:
     """Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
 
     Returns (prompt_text: str, is_nsfw: bool).
@@ -7764,6 +7802,13 @@ def build_image_prompt_from_context(chat_id: int, user_request: str) -> tuple:
             "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
             "- Do NOT add nudity if the scene says clothed/wearing\n"
             "- No preamble, no explanation, no quotes around the prompt\n"
+            + (
+                f"\n{max_reveal['hint']}\n"
+                f"This limit is ABSOLUTE — do not exceed it regardless of what the Scene requests. "
+                f"If the Scene asks for more revealing content than this limit allows, generate "
+                f"the scene at this maximum level instead.\n"
+                if max_reveal and max_reveal.get("hint") else ""
+            )
         )
 
         if _context_only_mode:
@@ -9140,12 +9185,13 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, "Usage: /hubaloo lust <0-10> [chat_id]")
             return
 
-        lust_val = max(0.0, min(10.0, lust_val))
+        lust_val = max(0.0, min(100.0, lust_val))
         _lust_scores[lust_target] = lust_val
         tier = get_lust_tier(lust_target)
+        reveal = get_reveal_level(lust_target)
         await context.bot.send_message(
             chat_id,
-            f"✅ Lust score for chat {lust_target} set to {lust_val:.1f}/10 → tier: {tier}"
+            f"✅ Lust score for chat {lust_target} set to {lust_val:.0f}/100 → tier: {tier} | reveal: {reveal['label']}"
         )
         main_logger.info(f"[CHEAT] /hubaloo lust: set {lust_target} → {lust_val:.1f} ({tier})")
         return
@@ -9524,9 +9570,10 @@ def _build_alteration_prompt(chat_id: int, user_request: str, previous_prompt: s
     return previous_prompt, previous_is_nsfw
 
 
-async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str, force_sfw: bool = False):
+async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str, max_reveal: Optional[dict] = None):
     """Generate and send image asynchronously (max 1 concurrent via semaphore).
-    force_sfw=True overrides the LLM's NSFW classification to ensure a tame image."""
+    max_reveal: dict from get_reveal_level() — constrains how explicit the generated image can be.
+    None means no constraint (normal behaviour)."""
 
     # Validate description before wasting GPU cycles
     clean_desc = _sanitize_image_description(description)
@@ -9569,12 +9616,12 @@ async def generate_and_send_image_async(bot: Bot, chat_id: int, description: str
         # The LLM sees the full conversation history so it can pick up props (toys, etc.)
         # mentioned in recent chat without any pre-injection on our side.
         prebuilt_prompt, original_is_nsfw = await loop.run_in_executor(
-            None, lambda: build_image_prompt_from_context(chat_id, clean_desc)
+            None, lambda: build_image_prompt_from_context(chat_id, clean_desc, max_reveal=max_reveal)
         )
 
-    # Lust-tier override: WARM forces SFW regardless of what the LLM classified
-    if force_sfw and original_is_nsfw:
-        main_logger.info(f"[LUST] force_sfw=True — overriding NSFW→SFW for chat={chat_id}")
+    # Reveal-level cap: clamp NSFW classification to what the lust level allows
+    if max_reveal is not None and not max_reveal["nsfw"] and original_is_nsfw:
+        main_logger.info(f"[LUST] reveal={max_reveal['label']} — overriding NSFW→SFW for chat={chat_id}")
         original_is_nsfw = False
 
     description = clean_desc  # keep original for LoRA keyword matching in generate_heather_image
@@ -9743,16 +9790,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Lust scoring based on photo content and current attraction level
         _pre_photo_lust = get_lust_score(chat_id)
         if is_intimate:
-            if _pre_photo_lust <= 6.0:
+            if _pre_photo_lust <= 60.0:
                 # Too forward too soon — sending nudes when she's not into you is a turnoff
-                update_lust_score(chat_id, -1.5)
-                main_logger.info(f"[{request_id}] Intimate photo while lust={_pre_photo_lust:.1f} (≤6) — lust penalty applied")
+                update_lust_score(chat_id, -15.0)
+                main_logger.info(f"[{request_id}] Intimate photo while lust={_pre_photo_lust:.1f} (≤60) — lust penalty applied")
             else:
                 # She's already into him — this lands well
-                update_lust_score(chat_id, 0.75)
+                update_lust_score(chat_id, 7.5)
         else:
             # Regular/flattering photo — small positive regardless of tier
-            update_lust_score(chat_id, 0.5)
+            update_lust_score(chat_id, 5.0)
 
         # Generate rating (no lock held during I/O)
         response = await loop.run_in_executor(
@@ -10109,8 +10156,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             "i want to see",
         }
         if _msg_bare in _short_context_triggers:
-            _lust = get_lust_tier(chat_id)
-            if _lust == "COLD":
+            _reveal = get_reveal_level(chat_id)
+            if _reveal["level"] == 0:
                 # Not feeling it — decline to share a photo
                 _cold_photo_declines = [
                     "Haha nah, not really in a pic mood rn 😅",
@@ -10120,15 +10167,13 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "lol I'll pass for now 😏",
                 ]
                 await context.bot.send_message(chat_id, random.choice(_cold_photo_declines))
-                main_logger.info(f"[{request_id}] Short photo declined — lust=COLD | chat={chat_id}")
+                main_logger.info(f"[{request_id}] Short photo declined — lust={get_lust_score(chat_id):.0f} (level 0) | chat={chat_id}")
             else:
                 is_online, status = check_comfyui_status()
                 if is_online and check_heather_face() and COMFYUI_WORKFLOW:
-                    main_logger.info(f"[{request_id}] Short/context-only image request from {chat_id}: '{user_message}' | lust={_lust}")
+                    main_logger.info(f"[{request_id}] Short/context-only image | chat={chat_id} | lust={get_lust_score(chat_id):.0f} | reveal={_reveal['label']}")
                     record_photo_sent(chat_id)
-                    # WARM → force SFW; HOT → allow NSFW naturally
-                    _force_sfw = (_lust == "WARM")
-                    await generate_and_send_image_async(context.bot, chat_id, user_message, force_sfw=_force_sfw)
+                    await generate_and_send_image_async(context.bot, chat_id, user_message, max_reveal=_reveal)
                 else:
                     _reason = ("ComfyUI offline" if not is_online
                                else "face image missing" if not check_heather_face()
