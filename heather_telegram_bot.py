@@ -6632,11 +6632,12 @@ React in 1-2 SHORT sentences like a text message:
             {"role": "user", "content": rating_prompt}
         ]
         
+        _img_req_id = f"img_rating_{chat_id}"
         with PerformanceTimer('TEXT_AI', 'image_rating', f"chat_id={chat_id}"):
             main_logger.info(
-                f"[{request_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
+                f"[{_img_req_id}] [LLM_REQUEST] endpoint={TEXT_AI_ENDPOINT}"
             )
-            _bc('LLM_REQUEST', request_id, chat_id,
+            _bc('LLM_REQUEST', _img_req_id, chat_id,
                 endpoint=TEXT_AI_ENDPOINT, model='local-model',
                 max_tokens=100, temp=0.75, type='image_rating')
             response = requests.post(    
@@ -6655,7 +6656,7 @@ React in 1-2 SHORT sentences like a text message:
             response_data = response.json()
             rating = response_data['choices'][0]['message']['content'].strip()
             rating = postprocess_response(rating)
-            _bc('LLM_RESPONSE', request_id, chat_id,
+            _bc('LLM_RESPONSE', _img_req_id, chat_id,
                 status=response.status_code, type='image_rating',
                 tokens=response_data.get('usage', {}).get('completion_tokens', '?'),
                 resp=rating[:120])
