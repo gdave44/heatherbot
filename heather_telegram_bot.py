@@ -5053,7 +5053,11 @@ def update_lust_score(chat_id: int, delta: float) -> None:
     """Nudge the lust score up or down, clamped to 0–10."""
     current = _lust_scores.get(chat_id, 5.0)
     _lust_scores[chat_id] = max(0.0, min(10.0, current + delta))
-    main_logger.debug(f"[LUST] chat={chat_id} delta={delta:+.1f} → {_lust_scores[chat_id]:.1f} ({get_lust_tier(chat_id)})")
+    new_score = _lust_scores[chat_id]
+    new_tier = get_lust_tier(chat_id)
+    main_logger.debug(f"[LUST] chat={chat_id} delta={delta:+.1f} → {new_score:.1f} ({new_tier})")
+    if BREADCRUMB_LOGGING:
+        main_logger.info(f"[LUST] chat={chat_id} | delta={delta:+.1f} | score={new_score:.1f}/10 | tier={new_tier}")
 
 def get_warmth_tier(chat_id: int) -> str:
     """Returns 'WARM', 'NEW', or 'COLD' based on user's warmth score."""
@@ -9686,6 +9690,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stats['regular_images'] += 1
 
         main_logger.info(f"[{request_id}] Stage 1 complete | chat_id={chat_id} | intimate={is_intimate}")
+        if BREADCRUMB_LOGGING:
+            main_logger.info(f"[{request_id}] Image description | chat_id={chat_id} | {description}")
 
         # Generate rating (no lock held during I/O)
         response = await loop.run_in_executor(
