@@ -5586,19 +5586,15 @@ async def verify_services_at_startup() -> dict:
 def check_text_ai_status() -> tuple[bool, str]:
     # Construct the status check endpoint from the base LLM_URL
     status_url = f"{LLM_URL}/v1/models"
-    
+
     try:
         response = requests.get(status_url, timeout=5)
         if response.status_code == 200:
-            data = response.json()
-            # Handle different API response formats (Ollama vs Generic OpenAI)
-            models = data.get('data', [])
-            if models:
-                model_name = models[0].get('id', 'unknown')
-                return True, f"Online ({model_name})"
-            return True, "Online (no models)"
+            # Report the configured model name, not whatever Ollama lists first
+            # (Ollama sorts by most recently loaded — could be the vision model)
+            return True, f"Online ({MODEL_NAME})"
         return False, f"HTTP {response.status_code} at {status_url}"
-    
+
     except requests.exceptions.ConnectionError:
         # Include the attempted URL in the return string for easier debugging
         return False, f"OFFLINE (Attempted: {status_url})"
