@@ -256,6 +256,9 @@ def log_startup_urls():
     logger.info(f"TTS_URL: {TTS_URL}")
     logger.info(f"IMG_URL: {IMG_URL}")
     logger.info(f"COMFYUI_URL: {COMFYUI_URL}")
+    logger.info("=== MODEL CONFIGURATION ===")
+    logger.info(f"TEXT_MODEL: {MODEL_NAME}")
+    logger.info(f"VISION_MODEL: {VISION_MODEL_NAME}")
     logger.info("================================")
 
 log_startup_urls()
@@ -6578,7 +6581,7 @@ def get_detailed_image_description(image_data: bytes) -> tuple[bool, str]:
             "Be thorough and clinical."
         )
 
-        with PerformanceTimer('OLLAMA', 'detailed_describe', f"hash={img_hash[:8]}"):
+        with PerformanceTimer('OLLAMA', 'detailed_describe', f"hash={img_hash[:8]} model={VISION_MODEL_NAME}"):
             response = requests.post(
                 f'{IMAGE_AI_ENDPOINT}/api/generate',
                 json={
