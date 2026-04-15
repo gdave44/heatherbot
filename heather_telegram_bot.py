@@ -906,8 +906,10 @@ awaiting_image_description_time: Dict[int, float] = {}  # Timeout tracking for /
 _last_image_state: Dict[int, dict] = {}
 # Buffer for seeds captured during the most recent generate_heather_image call
 _pending_image_seeds: dict = {}
-# Lust/attraction score per chat — 0.0 (cold) to 10.0 (hot), default 5.0 (neutral)
+# Lust/attraction score per chat — 0.0 (cold) to 100.0 (hot), default 50 (neutral)
 _lust_scores: Dict[int, float] = {}
+# Timestamp of last proactive lust-driven picture sent per chat
+_last_proactive_pic: Dict[int, float] = {}
 SELFIE_DESCRIPTION_TIMEOUT = 120  # 2 min timeout
 image_generation_semaphore = asyncio.Semaphore(1)  # Max 1 concurrent generation
 reply_in_progress: set = set()  # Chat IDs currently being replied to — prevents duplicate concurrent replies
@@ -1739,6 +1741,7 @@ def get_conversation_dynamics(chat_id: int) -> dict:
             'last_hook_at': 0,
             'used_stories': set(),
             'tip_hook_sent': False,
+            'session_start': time.time(),
         }
     return conversation_dynamics[chat_id]
 
@@ -3680,6 +3683,38 @@ OLLAMA_DOWN_PHOTO_RESPONSES = [
 def get_ollama_down_response() -> str:
     """Get a graceful response when Ollama is unavailable for image analysis."""
     return random.choice(OLLAMA_DOWN_PHOTO_RESPONSES)
+
+def get_time_gap_context(chat_id: int) -> str:
+    """Build a prompt injection describing how long the user has been away and session length."""
+    parts = []
+
+    # Gap since last user message
+    _last_user = conversation_activity.get(chat_id, {}).get('last_user', 0)
+    if _last_user:
+        gap_s = time.time() - _last_user
+        gap_m = int(gap_s / 60)
+        if gap_m >= 360:   # 6+ hours
+            h = gap_m // 60
+            parts.append(f"They've been away for about {h} hours — pick up warmly but don't guilt-trip.")
+        elif gap_m >= 120:  # 2-6 hours
+            h = gap_m // 60
+            parts.append(f"It's been about {h} hour{'s' if h != 1 else ''} since their last message — acknowledge the gap naturally if it fits.")
+        elif gap_m >= 30:   # 30 min – 2 hours
+            parts.append(f"It's been about {gap_m} minutes since their last message — nothing major, just a pause.")
+
+    # Session duration
+    dyn = conversation_dynamics.get(chat_id, {})
+    session_start = dyn.get('session_start')
+    if session_start:
+        session_m = int((time.time() - session_start) / 60)
+        if session_m >= 240:   # 4+ hours
+            parts.append(f"You've been chatting on and off for about {session_m // 60} hours today — it's been a long conversation.")
+        elif session_m >= 60:
+            parts.append(f"You've been talking for about {session_m // 60} hour{'s' if session_m // 60 != 1 else ''} this session.")
+
+    if not parts:
+        return ""
+    return "\n\n[TIME AWARENESS: " + " ".join(parts) + "]"
 
 def generate_request_id() -> str:
     """Generate a unique request ID for log correlation."""
@@ -6060,7 +6095,8 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                     "Be polite but distant. Keep things surface-level. Don't flirt. If they push for anything sexual or ask for photos, brush it off without being mean.]"
                 )
 
-            system_content = system_prompt + texting_instruction + state_context + time_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context
+            gap_context = get_time_gap_context(chat_id)
+            system_content = system_prompt + texting_instruction + state_context + time_context + gap_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -11708,6 +11744,169 @@ async def main():
         main_logger.info("[REENGAGEMENT] Long-term re-engagement system started (auto-scan ON)")
     else:
         main_logger.info("[REENGAGEMENT] Auto-scan disabled. Use /admin_reengage_scan to test manually.")
+
+    # ====================================================================
+    # LUST DECAY LOOP
+    # Decays lust scores toward neutral (50) while users are idle.
+    # Runs every 30 minutes.
+    # ====================================================================
+
+    async def _lust_decay_loop():
+        """Decay lust scores toward neutral (50) while users are idle."""
+        await asyncio.sleep(1800)  # First decay after 30 min
+        while True:
+            try:
+                now = time.time()
+                for cid in list(_lust_scores.keys()):
+                    last_user = conversation_activity.get(cid, {}).get('last_user', 0)
+                    if not last_user:
+                        continue
+                    idle_hours = (now - last_user) / 3600
+                    score = _lust_scores.get(cid, 50.0)
+                    neutral = 50.0
+
+                    if score == neutral or idle_hours < 1.0:
+                        continue
+
+                    # Decay rate (points/hour) based on idle time
+                    if idle_hours < 3:
+                        rate = 2.0
+                    elif idle_hours < 8:
+                        rate = 1.0
+                    elif idle_hours < 24:
+                        rate = 0.5
+                    else:
+                        rate = 3.0  # Faster decay after a full day away
+
+                    # Decay toward neutral, not past it
+                    decay = rate * 0.5  # Apply per 30-min tick
+                    if score > neutral:
+                        _lust_scores[cid] = max(neutral, score - decay)
+                    else:
+                        _lust_scores[cid] = min(neutral, score + decay)
+
+                    if BREADCRUMB_LOGGING and abs(score - _lust_scores[cid]) >= 0.5:
+                        main_logger.info(
+                            f"[LUST_DECAY] chat={cid} | idle={idle_hours:.1f}h | "
+                            f"{score:.1f}→{_lust_scores[cid]:.1f} | tier={get_lust_tier(cid)}"
+                        )
+            except Exception as e:
+                main_logger.error(f"[LUST_DECAY] Error: {e}")
+            await asyncio.sleep(1800)  # Run every 30 minutes
+
+    asyncio.get_running_loop().create_task(_lust_decay_loop())
+    main_logger.info("[LUST] Lust decay loop started")
+
+    # ====================================================================
+    # PROACTIVE LUST PICTURE SENDER
+    # When lust >= 70 (HOT) and user has been idle 2-6 hours, she sends
+    # a spontaneous pic. Cooldown: 6 hours per chat. Scans every 20 min.
+    # ====================================================================
+
+    _PROACTIVE_PIC_IDLE_MIN = 7200    # 2 hours idle minimum
+    _PROACTIVE_PIC_IDLE_MAX = 21600   # 6 hours idle maximum
+    _PROACTIVE_PIC_COOLDOWN = 21600   # 6 hours between proactive pics per chat
+    _PROACTIVE_PIC_MIN_TURNS = 8      # Minimum conversation turns to qualify
+    _PROACTIVE_PIC_LUST_MIN = 70.0    # HOT tier minimum
+    _PROACTIVE_PIC_HOUR_START = 10    # No pics before 10 AM
+    _PROACTIVE_PIC_HOUR_END = 23      # No pics after 11 PM
+
+    _PROACTIVE_PIC_CAPTIONS = [
+        "Thinking about you 😏",
+        "Missing you a little... 😘",
+        "Bored without you 😈",
+        "You left me all alone 😏",
+        "Was just thinking about you...",
+        "Still here you know 😘",
+        "Thought you might want to see this 😏",
+    ]
+
+    async def _lust_picture_sender():
+        """Proactively send a photo when lust is HOT and user has been idle 2-6 hours."""
+        await asyncio.sleep(600)  # Wait 10 min after startup before first scan
+        while True:
+            try:
+                hour = datetime.now().hour
+                if _PROACTIVE_PIC_HOUR_START <= hour < _PROACTIVE_PIC_HOUR_END:
+                    is_comfy_online, _ = check_comfyui_status()
+                    if is_comfy_online and check_heather_face() and COMFYUI_WORKFLOW:
+                        now = time.time()
+                        for cid in list(_lust_scores.keys()):
+                            try:
+                                # Lust gate
+                                if get_lust_score(cid) < _PROACTIVE_PIC_LUST_MIN:
+                                    continue
+                                # Cooldown gate
+                                if now - _last_proactive_pic.get(cid, 0) < _PROACTIVE_PIC_COOLDOWN:
+                                    continue
+                                # Idle window gate
+                                last_user = conversation_activity.get(cid, {}).get('last_user', 0)
+                                if not last_user:
+                                    continue
+                                idle_s = now - last_user
+                                if not (_PROACTIVE_PIC_IDLE_MIN <= idle_s <= _PROACTIVE_PIC_IDLE_MAX):
+                                    continue
+                                # Minimum turns gate
+                                turns = conversation_turn_count.get(cid, 0)
+                                if turns < _PROACTIVE_PIC_MIN_TURNS:
+                                    continue
+                                # Blocked / manual mode gate
+                                if is_blocked(cid) or cid in manual_mode_chats:
+                                    continue
+
+                                reveal = get_reveal_level(cid)
+                                if reveal["level"] == 0:
+                                    continue
+
+                                main_logger.info(
+                                    f"[LUST_PIC] Sending proactive pic to {cid} | "
+                                    f"lust={get_lust_score(cid):.0f} | reveal={reveal['label']} | "
+                                    f"idle={idle_s/3600:.1f}h"
+                                )
+                                _last_proactive_pic[cid] = now
+
+                                # Send a caption first
+                                caption = random.choice(_PROACTIVE_PIC_CAPTIONS)
+                                await _app.bot.send_message(cid, caption)
+                                store_message(cid, personality.name, caption)
+
+                                # Generate and send image in executor
+                                loop = asyncio.get_running_loop()
+                                prompt, is_nsfw = await loop.run_in_executor(
+                                    None,
+                                    lambda _cid=cid, _rev=reveal: build_image_prompt_from_context(
+                                        _cid, "__context_only__", max_reveal=_rev
+                                    )
+                                )
+                                if reveal is not None and not reveal["nsfw"] and is_nsfw:
+                                    is_nsfw = False
+
+                                image_data = await loop.run_in_executor(
+                                    None,
+                                    lambda _p=prompt, _n=is_nsfw: generate_heather_image(
+                                        "__context_only__", is_nsfw=_n, prebuilt_prompt=_p
+                                    )
+                                )
+                                if image_data and is_valid_image_data(image_data):
+                                    import io as _io
+                                    await _app.bot.send_photo(cid, photo=_io.BytesIO(image_data))
+                                    record_photo_sent(cid)
+                                    main_logger.info(f"[LUST_PIC] Sent proactive pic to {cid}")
+                                else:
+                                    main_logger.warning(f"[LUST_PIC] Image generation failed for {cid}")
+
+                                await asyncio.sleep(random.randint(30, 90))
+
+                            except Exception as e:
+                                main_logger.error(f"[LUST_PIC] Error for chat {cid}: {e}")
+
+            except Exception as e:
+                main_logger.error(f"[LUST_PIC] Scanner error: {e}")
+
+            await asyncio.sleep(1200)  # Scan every 20 minutes
+
+    asyncio.get_running_loop().create_task(_lust_picture_sender())
+    main_logger.info("[LUST] Proactive lust picture sender started")
 
     # ====================================================================
     # STARTUP CATCH-UP SYSTEM
