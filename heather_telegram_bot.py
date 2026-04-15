@@ -6278,7 +6278,7 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
         # Sexual energy token boost
         _energy = get_conversation_energy(chat_id)
         if _energy == "hot":
-            max_tokens = max(max_tokens, 130)
+            max_tokens = max(max_tokens, 200)
 
         # Narrative request detection — "tell me a story", "Navy stories", etc.
         # These need more tokens even outside formal story mode
@@ -6287,7 +6287,18 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                                'tell me more', 'what was it like', 'full story']
         _msg_lower_for_tokens = user_message.lower()
         if any(kw in _msg_lower_for_tokens for kw in _narrative_keywords):
-            max_tokens = max(max_tokens, 180)
+            max_tokens = max(max_tokens, 220)
+
+        # Sexual narration requests — "tell me how you want to X", "describe how you'd Y"
+        # These are invitations for detailed dirty talk and need generous token room
+        _sexual_narration_keywords = [
+            'tell me how', 'tell me what', 'describe how', 'describe what',
+            'how would you', 'how do you want', 'how bad do you want',
+            'what would you do', 'what do you want to do',
+            'show me how', 'talk dirty', 'say it', 'keep going',
+        ]
+        if any(kw in _msg_lower_for_tokens for kw in _sexual_narration_keywords) and _energy == "hot":
+            max_tokens = max(max_tokens, 300)
 
         # Story mode — boost tokens for detailed narrative
         if _in_story_mode:
