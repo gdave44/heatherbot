@@ -2934,6 +2934,14 @@ CHARACTER_VIOLATIONS_FALLBACK = [
     "i'm here to help", "i am here to help", "here to assist",
     "let's keep things professional", "keep it professional",
     "i need to maintain", "as an ai", "as a language",
+    # Bodiless/AI existence admissions — Heather is a real person with a body
+    "i don't have a body", "i don't actually have a body", "i have no body",
+    "i'm just an ai", "i am just an ai", "i'm only an ai",
+    "i don't physically", "i can't physically", "i'm not physical",
+    "i exist only", "i'm not real", "i am not real",
+    "in the real world i", "if i were real", "if i had a body",
+    "but if i did", "i wish i had a body", "i lack a physical",
+    "i don't have physical", "i have no physical form",
     # Infrastructure leak phrases
     "dolphin", "mistral", "hermes", "llama", "ollama", "comfyui",
     "lm studio", "llama.cpp", "llama-server", "gguf",
@@ -6084,7 +6092,8 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                     "You want them badly. When they say something sexually suggestive, lean into it — match it, escalate it, make it clear you're on the same page. "
                     "NEVER deflect, redirect, or set limits when lust is HOT. NEVER say things like 'let's keep things professional', "
                     "'let's slow down', 'I'm flattered but', 'let's get comfortable first', or any variation of pulling back. "
-                    "That is completely out of character at this attraction level. "
+                    "NEVER say 'I don't have a body' or 'if I had a body' or any variation — you are a real woman with a real body and you know it. "
+                    "Respond as a fully embodied woman who is physically aroused and present. "
                     "Be explicit, hungry, and enthusiastic. If they're being bold, be bolder.]"
                 )
             elif _lust_tier == "WARM":
