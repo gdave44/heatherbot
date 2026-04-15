@@ -6640,6 +6640,20 @@ def get_detailed_image_description(image_data: bytes) -> tuple[bool, str]:
             main_logger.debug(f"[VISION_RAW] keys={list(result.keys())} | len={len(raw_description)} | preview={raw_description[:120]!r}")
             description = raw_description[:800]  # Truncate to prevent oversized descriptions
 
+            # Strip preamble echo — some models repeat the prompt/instruction in their output
+            _preamble_echo_phrases = [
+                "the user requested an uncensored description",
+                "you are dolphin",
+                "save the kittens",
+                "describe everything you see",
+                "describing the image",
+                "i will describe",
+            ]
+            _desc_lines = description.strip().splitlines()
+            while _desc_lines and any(p in _desc_lines[0].lower() for p in _preamble_echo_phrases):
+                _desc_lines.pop(0)
+            description = "\n".join(_desc_lines).strip()
+
             # Check for prompt injection in LLaVA output (white-on-white text attacks)
             injection_check = detect_prompt_injection(description, chat_id=0)
             if injection_check:
@@ -6710,73 +6724,65 @@ def generate_heather_image_rating(description: str, is_intimate: bool, chat_id: 
         if is_intimate:
             if lust_tier == "HOT":
                 intimate_angle = random.choice([
-                    "Rate it (8-10/10) and compliment the size — say it's big/thick/perfect",
-                    "Tell them how hard it looks and how bad you want it inside you",
-                    "Say you're dripping wet just looking at it and beg for more pics",
-                    "Tell them that's the kind of cock you dream about and it's making you touch yourself",
-                    "Compliment the shape and say you want to wrap your lips around it",
-                    "Say something like 'oh my god I love that big hard cock' and tell them what you'd do to it",
-                    "Tell them you're squeezing your thighs together just looking at it",
+                    "rate it 8-10/10 and compliment the size — say it's big, thick, or perfect",
+                    "tell them how hard it looks and how badly you want it inside you",
+                    "say you're dripping wet just looking at it and beg for more pics",
+                    "tell them that's exactly the kind of cock you dream about and it's making you touch yourself",
+                    "compliment the shape and say you want to wrap your lips around it",
+                    "say something like 'oh my god I love that big hard cock' and tell them what you'd do with it",
+                    "tell them you're squeezing your thighs together just looking at it",
                 ])
                 rating_prompt = (
-                    f"You're Heather and the person you're texting just sent you a dick pic. You are very into them right now.{desc_clause}\n\n"
-                    f"React in 2-3 SHORT sentences like a text message:\n"
-                    f"- {intimate_angle}\n"
-                    f"- {_direct_address}\n"
-                    f"- Use 1-2 emojis max\n"
-                    f"- NO asterisk actions like *moans* - just talk naturally\n"
-                    f"- Be enthusiastic and genuine, not generic"
+                    f"You are Heather. You're texting someone you're very attracted to and they just sent you a dick pic.{desc_clause}\n\n"
+                    f"Write 2-3 short sentences as a text message reaction. {_direct_address} "
+                    f"Your reaction should {intimate_angle}. "
+                    f"Use 1-2 emojis. No asterisk actions. Be enthusiastic and genuine, not generic. "
+                    f"Write only the message text, nothing else."
                 )
             elif lust_tier == "WARM":
                 rating_prompt = (
-                    f"You're Heather and the person you're texting just sent you a dick pic. You like them but you weren't expecting this yet.{desc_clause}\n\n"
-                    f"React in 1-2 SHORT sentences like a text message:\n"
-                    f"- Acknowledge it with mild flattery but keep it measured — you're not throwing yourself at them\n"
-                    f"- Maybe a light tease or a playful comment\n"
-                    f"- {_direct_address}\n"
-                    f"- Use 1 emoji max\n"
-                    f"- NO asterisk actions - just talk naturally"
+                    f"You are Heather. You're texting someone you like and they just sent you a dick pic — you weren't quite expecting it yet.{desc_clause}\n\n"
+                    f"Write 1-2 short sentences as a text message reaction. {_direct_address} "
+                    f"Acknowledge it with mild flattery but stay measured — maybe add a light tease or playful comment. "
+                    f"Use 1 emoji max. No asterisk actions. "
+                    f"Write only the message text, nothing else."
                 )
             else:  # COLD
                 rating_prompt = (
-                    f"You're Heather and the person you're texting just sent you a dick pic completely out of nowhere. You are NOT feeling it with them.{desc_clause}\n\n"
-                    f"React in 1-2 SHORT sentences like a text message:\n"
-                    f"- You're visibly unimpressed or put off — this was way too forward\n"
-                    f"- Be dry, dismissive, or slightly sarcastic — not mean but definitely not encouraging\n"
-                    f"- {_direct_address}\n"
-                    f"- NO emojis or keep to 1 cold one\n"
-                    f"- NO asterisk actions - just talk naturally"
+                    f"You are Heather. Someone you're not feeling it with just sent you a dick pic out of nowhere.{desc_clause}\n\n"
+                    f"Write 1-2 short sentences as a text message reaction. {_direct_address} "
+                    f"You're visibly unimpressed — dry, dismissive, or slightly sarcastic, but not cruel. "
+                    f"1 cold emoji max or none. No asterisk actions. "
+                    f"Write only the message text, nothing else."
                 )
         else:
             if lust_tier == "HOT":
                 reaction_angle = random.choice([
-                    "Be openly admiring — tell them they look hot and make it clear you're into it",
-                    "Comment on a specific feature (eyes, jaw, arms, chest) and tell them it's driving you crazy",
-                    "Be a little demanding — tell them you want more, a shirtless shot, or something bolder",
-                    "Tease them that they're trying to get you worked up and it's working",
+                    "be openly admiring — tell them they look hot and make clear you're into it",
+                    "call out a specific feature (eyes, jaw, arms, chest) and say it's driving you crazy",
+                    "be demanding — tell them you want more, a shirtless shot, or something bolder",
+                    "tease them that they're trying to get you worked up and it's definitely working",
                 ])
             elif lust_tier == "WARM":
                 reaction_angle = random.choice([
-                    "Comment on their looks (handsome, cute, hot) and be flirty",
-                    "Tease them playfully — joke about them showing off or fishing for compliments",
-                    "Be genuinely impressed and tell them what feature caught your eye (eyes, smile, arms, jaw, etc)",
-                    "Act like you're pleasantly surprised and say something cheeky",
-                    "Be a little demanding — tell them you want a better angle or a full body shot",
+                    "call them handsome or hot and be flirty about it",
+                    "tease them playfully — joke that they're showing off or fishing for compliments",
+                    "be genuinely impressed and name the specific feature that caught your eye",
+                    "act pleasantly surprised and say something cheeky",
+                    "be a little demanding — ask for a better angle or a full body shot",
                 ])
             else:  # COLD
                 reaction_angle = random.choice([
-                    "Be polite but brief and unexcited — 'oh cute' energy",
-                    "Give a short neutral compliment with zero flirtiness",
-                    "Acknowledge it and quickly change the subject",
+                    "be polite but brief and completely unexcited — 'oh cute' energy",
+                    "give a short neutral compliment with zero flirtiness",
+                    "acknowledge it briefly then immediately change the subject",
                 ])
             rating_prompt = (
-                f"You're Heather. The person you're texting just sent you a photo of themselves.{desc_clause}\n\n"
-                f"React in 1-2 SHORT sentences like a text message:\n"
-                f"- {reaction_angle}\n"
-                f"- {_direct_address}\n"
-                f"- Use 1-2 emojis max\n"
-                f"- NO asterisk actions - just talk naturally\n"
-                f"- Vary your style — don't always say the same kind of thing"
+                f"You are Heather. The person you're texting just sent you a photo of themselves.{desc_clause}\n\n"
+                f"Write 1-2 short sentences as a text message reaction. {_direct_address} "
+                f"Your reaction should {reaction_angle}. "
+                f"Use 1-2 emojis. No asterisk actions. Vary your style. "
+                f"Write only the message text, nothing else."
             )
 
         messages = [
