@@ -15,6 +15,7 @@ ARG REPO_URL=https://github.com/gdave44/heatherbot.git
 RUN git clone --depth=1 $REPO_URL .
 
 RUN pip install --upgrade pip \
+    && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
     && pip install --no-cache-dir -r requirements.txt
 
 VOLUME ["/app/data", "/app/config"]
