@@ -9230,10 +9230,6 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id if update.effective_user else chat_id
-    main_logger.info(f"[HUBALOO] {'='*40}")
-    main_logger.info(f"[HUBALOO] /hubaloo invoked by user_id={user_id} chat_id={chat_id}")
-    main_logger.info(f"[HUBALOO] args={args or '(none)'} | lust_before={get_lust_score(chat_id):.1f} tier={get_lust_tier(chat_id)}")
-    main_logger.info(f"[HUBALOO] {'='*40}")
 
     if not is_admin(user_id):
         main_logger.warning(f"[CHEAT] /hubaloo rejected — user {user_id} is not admin (ADMIN_USER_ID={ADMIN_USER_ID})")
@@ -9241,6 +9237,10 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = context.args or []
+    main_logger.info(f"[HUBALOO] {'='*40}")
+    main_logger.info(f"[HUBALOO] /hubaloo invoked by user_id={user_id} chat_id={chat_id}")
+    main_logger.info(f"[HUBALOO] args={args or '(none)'} | lust_before={get_lust_score(chat_id):.1f} tier={get_lust_tier(chat_id)}")
+    main_logger.info(f"[HUBALOO] {'='*40}")
 
     # ── lust subcommand ─────────────────────────────────────────────────────
     # /hubaloo lust <0-10> [chat_id]  — directly set the lust score
