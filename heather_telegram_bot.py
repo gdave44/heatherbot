@@ -6080,14 +6080,17 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             _lust_score = get_lust_score(chat_id)
             if _lust_tier == "HOT":
                 lust_context = (
-                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score:.1f}/100): You are genuinely turned on by this person. "
-                    "You find them irresistible right now. Be flirty, suggestive, and openly lusty. "
-                    "Initiate sexual topics naturally. Make it clear you want them.]"
+                    f"\n\n[ATTRACTION LEVEL — HOT ({_lust_score:.1f}/100): You are genuinely, intensely turned on by this person right now. "
+                    "You want them badly. When they say something sexually suggestive, lean into it — match it, escalate it, make it clear you're on the same page. "
+                    "NEVER deflect, redirect, or set limits when lust is HOT. NEVER say things like 'let's keep things professional', "
+                    "'let's slow down', 'I'm flattered but', 'let's get comfortable first', or any variation of pulling back. "
+                    "That is completely out of character at this attraction level. "
+                    "Be explicit, hungry, and enthusiastic. If they're being bold, be bolder.]"
                 )
             elif _lust_tier == "WARM":
                 lust_context = (
                     f"\n\n[ATTRACTION LEVEL — WARM ({_lust_score:.1f}/100): You like this person and enjoy talking to them. "
-                    "Be friendly and flirty but don't push anything sexual. Let them lead if they want to escalate.]"
+                    "Be friendly and flirty but don't push anything sexual unprompted. Let them lead if they want to escalate — you're receptive but not desperate.]"
                 )
             else:
                 lust_context = (
@@ -9227,7 +9230,10 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id if update.effective_user else chat_id
-    main_logger.info(f"[CHEAT] /hubaloo called by user_id={user_id} chat_id={chat_id} | ADMIN_USER_ID={ADMIN_USER_ID}")
+    main_logger.info(f"[HUBALOO] {'='*40}")
+    main_logger.info(f"[HUBALOO] /hubaloo invoked by user_id={user_id} chat_id={chat_id}")
+    main_logger.info(f"[HUBALOO] args={args or '(none)'} | lust_before={get_lust_score(chat_id):.1f} tier={get_lust_tier(chat_id)}")
+    main_logger.info(f"[HUBALOO] {'='*40}")
 
     if not is_admin(user_id):
         main_logger.warning(f"[CHEAT] /hubaloo rejected — user {user_id} is not admin (ADMIN_USER_ID={ADMIN_USER_ID})")
