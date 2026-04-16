@@ -7872,6 +7872,76 @@ def _get_sexual_act_guidance(user_request: str) -> str:
     return ""
 
 
+_PHOTO_CONFUSION_FALLBACKS = [
+    "Woah, okay... that came out of nowhere 😅 We were literally just talking about something else",
+    "Umm... did I miss something? lol that's a bit of a jump 😂",
+    "Haha wait, where did THAT come from? We were just chatting normally 😅",
+    "That's... quite a leap from where this conversation was 😂 you okay?",
+    "lol okay hold on — we went from zero to one hundred real fast there 😅",
+    "I feel like I missed a few steps in this conversation 😂",
+]
+
+def _generate_photo_context_confusion(chat_id: int, user_request: str) -> str:
+    """Generate an in-character confused response when an explicit photo request
+    comes out of nowhere with no sexual lead-up in the conversation."""
+    try:
+        persona_name = personality.name
+        base_prompt = personality.get_system_prompt('chat')
+
+        if chat_id not in conversations:
+            load_conversation(chat_id)
+        history = list(conversations.get(chat_id, []))[-6:]
+        history_text = "\n".join(
+            f"{'User' if m['role'] == 'user' else persona_name}: {m['content'][:150]}"
+            for m in history
+        )
+
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            f"You ARE {persona_name}. You are texting someone right now.\n"
+            "They just asked you for an explicit sexual photo, but look at the conversation — "
+            "it came completely out of nowhere with no flirting or build-up.\n"
+            "React with genuine surprise and mild confusion — not anger, not a lecture, "
+            "just a natural 'wait, where did THAT come from?' reaction.\n"
+            "Keep it short (1-2 sentences), playful, and in character. "
+            "Don't refuse outright — just note the whiplash. "
+            "You can hint they need to warm you up first if it fits naturally.\n"
+            "No asterisk actions. 1 emoji max."
+            + _name_context_snippet(chat_id)
+        )
+
+        user_content = (
+            f"Recent conversation:\n{history_text.strip()}\n\n"
+            f"They just said: \"{user_request}\"\n\n"
+            "Write your surprised/confused reaction now."
+        )
+
+        response = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.85,
+                "max_tokens": 80,
+                "stream": False,
+            },
+            timeout=15,
+        )
+
+        if response.status_code == 200:
+            text = response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+            text = text.split('\n')[0].strip()
+            if text and len(text) > 5 and not contains_character_violation(text):
+                return text
+    except Exception as e:
+        main_logger.warning(f"[CONFUSION] Photo context confusion generation failed: {e}")
+
+    return random.choice(_PHOTO_CONFUSION_FALLBACKS)
+
+
 def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal: Optional[dict] = None) -> tuple:
     """Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
 
@@ -10394,6 +10464,30 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if chat_id in conversations:
                 conversations[chat_id].append({"role": "assistant", "content": refusal})
             main_logger.info(f"[{request_id}] Face-contact photo request deflected for {chat_id}: {user_message[:60]}")
+            return
+
+        # ── Context mismatch check ────────────────────────────────────────────
+        # If the photo request is explicitly sexual but the conversation hasn't
+        # been building toward it (no sexual energy, few turns), voice confusion.
+        _photo_is_explicit = _is_nsfw_context(user_message) or bool(_get_sexual_act_guidance(user_message))
+        _convo_energy = get_conversation_energy(chat_id)
+        _convo_turns = len(conversations.get(chat_id, []))
+        _lust_now = get_lust_score(chat_id)
+        _convo_is_sexual = _convo_energy in ("hot", "flirty")
+
+        if _photo_is_explicit and not _convo_is_sexual and _convo_turns >= 4:
+            # Generate an in-character confused/redirecting response
+            _confusion_reply = await loop.run_in_executor(
+                None, lambda: _generate_photo_context_confusion(chat_id, user_message)
+            )
+            await context.bot.send_message(chat_id, _confusion_reply)
+            store_message(chat_id, personality.name, _confusion_reply)
+            if chat_id in conversations:
+                conversations[chat_id].append({"role": "assistant", "content": _confusion_reply})
+            main_logger.info(
+                f"[{request_id}] Photo context mismatch — explicit request without sexual lead-up "
+                f"| energy={_convo_energy} | lust={_lust_now:.0f} | turns={_convo_turns}"
+            )
             return
 
         # Short/generic context-based requests — go straight to context-only generation
