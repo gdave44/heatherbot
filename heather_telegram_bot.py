@@ -7795,15 +7795,15 @@ _SEXUAL_ACT_GLOSSARY: list[tuple[list[str], str]] = [
     # ── Oral / blowjob ────────────────────────────────────────────────────────
     (["sucking his cock", "blowing him", "giving him head", "on your knees sucking",
       "suck his cock", "suck him off", "give him a blowjob", "blow job"],
-     "woman kneeling on floor in front of a standing man, face tilted upward "
-     "making eye contact with him, hands resting on his thighs, "
-     "anticipatory expression — imply the act through positioning and eye contact only, "
-     "face must NOT be in contact with or immediately adjacent to his genitals"),
+     "woman kneeling on floor in front of a standing man, her face tilted upward "
+     "making eye contact with him, hands resting on his thighs, anticipatory expression — "
+     "imply the act through positioning and eye contact only, no face-genital contact shown. "
+     "Man seen from waist down only or from behind — his face must NOT be in frame"),
 
     (["deepthroat", "deep throat"],
-     "woman kneeling, head tilted back, neck extended, gazing upward at the man standing "
-     "above her, hands gripping his thighs, composition implies deep oral — "
-     "no face-genital contact shown directly"),
+     "woman kneeling, head tilted back, neck extended, gazing upward, "
+     "hands gripping the man's thighs, composition implies deep oral — "
+     "no face-genital contact shown. Man cropped at the waist or seen from behind only"),
 
     # ── Masturbation / solo ───────────────────────────────────────────────────
     (["masturbating", "touching yourself", "playing with yourself",
@@ -7836,15 +7836,21 @@ _SEXUAL_ACT_GLOSSARY: list[tuple[list[str], str]] = [
      "woman on all fours on a bed or floor, back arched, hips angled toward camera, "
      "rear three-quarter view, buttocks and back visible"),
 
-    (["riding him", "on top of him", "cowgirl", "reverse cowgirl"],
+    (["riding him", "on top of him", "cowgirl"],
      "woman straddling a man lying on his back, seated upright on top of him, "
-     "hands on his chest or thighs, expression of pleasure, "
-     "side or front angle — no explicit penetration shown, implied by positioning"),
+     "hands on his chest, expression of pleasure, front or slight side angle — "
+     "no explicit penetration shown, implied by positioning. "
+     "Man's face turned to the side or obscured; only her face clearly visible"),
+
+    (["reverse cowgirl"],
+     "woman straddling a man, facing away from him, back arched, "
+     "rear three-quarter view — her face visible over her shoulder, "
+     "man's face hidden beneath her or cropped out of frame"),
 
     (["from behind", "taking it from behind", "bent over taking it"],
-     "woman bent over a surface (bed/table/counter) with a man positioned behind her, "
-     "rear or side angle, both figures visible, act implied by positioning — "
-     "no explicit penetration shown"),
+     "woman bent over a surface (bed/table/counter), man positioned behind her, "
+     "rear or side angle — woman's face turned toward camera, man seen from behind only, "
+     "his face never visible. Act implied by positioning, no explicit penetration shown"),
 
     (["spread eagle", "spreadeagle"],
      "woman lying on her back, arms and legs spread wide apart, "
@@ -8026,6 +8032,15 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             "For blowjob/oral contexts: show her kneeling/positioned in front of a man "
             "with her face tilted upward gazing at him, hands on his thighs — "
             "imply the act through body position and eye contact, NOT through face-genital proximity.\n"
+            "- TWO-PERSON FACE RULE: when a scene includes a man and a woman together, "
+            "the woman's face MUST be the only one clearly visible and facing the camera. "
+            "The man's face must be obscured — turned away from camera, cropped out of frame, "
+            "seen only from behind, buried in shadow, or hidden by angle. "
+            "NEVER show both faces clearly in the same frame — this breaks face-swap compositing. "
+            "Describe the man's presence through his body only: torso, hands, arms, legs — never his face. "
+            "Examples: 'man seen from behind', 'man's face turned away', "
+            "'man cropped at the neck', 'only her face visible', "
+            "'his face out of frame', 'shot from behind him looking over his shoulder at her'.\n"
             "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
             "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
             "- Do NOT add nudity if the scene says clothed/wearing\n"
