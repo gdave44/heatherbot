@@ -6108,7 +6108,15 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 )
 
             gap_context = get_time_gap_context(chat_id)
-            system_content = system_prompt + texting_instruction + state_context + time_context + gap_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context
+
+            # Family awareness — inject persona's family/home-life context
+            _family_awareness_raw = personality.personality.get('family_awareness', '').strip()
+            family_context = (
+                f"\n\n[FAMILY & HOME LIFE CONTEXT: {_family_awareness_raw}]"
+                if _family_awareness_raw else ""
+            )
+
+            system_content = system_prompt + texting_instruction + state_context + time_context + gap_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context + family_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -8023,6 +8031,29 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             for m in history
         )
 
+        # ── Family awareness — inject into image prompt only when lust is high enough ──
+        _img_lust = get_lust_score(chat_id)
+        _family_raw = p.get('family_awareness', '').strip()
+        _family_img_block = ""
+        if _family_raw:
+            if _img_lust >= 75:
+                # High lust — she's aware of her home life but in a sexually charged mood;
+                # inject as context so the model can reference it naturally if relevant
+                _family_img_block = (
+                    f"CHARACTER HOME LIFE (lust={_img_lust:.0f}/100 — she is comfortable being sexual right now):\n"
+                    f"{_family_raw}\n"
+                    "This context may inform setting choices (e.g. her bedroom, bathroom, home) "
+                    "but does NOT restrict sexual content at this attraction level.\n\n"
+                )
+            else:
+                # Lower lust — family context acts as a mild restraint on setting/explicitness
+                _family_img_block = (
+                    f"CHARACTER HOME LIFE (lust={_img_lust:.0f}/100 — below threshold for explicit content):\n"
+                    f"{_family_raw}\n"
+                    "Keep the setting and content consistent with someone who is mindful of their home life. "
+                    "Avoid settings or props that would feel out of character for a parent at home.\n\n"
+                )
+
         # ── System prompt ──
         system_prompt = (
             "You are an expert ComfyUI/FLUX image prompt writer. "
@@ -8030,6 +8061,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             "natural, comma-separated descriptive phrases — NOT sentences.\n\n"
             f"CHARACTER — integrate ALL physical details naturally into the prompt:\n"
             f"{char_block}\n\n"
+            + (_family_img_block if _family_img_block else "")
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
             + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
             "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
