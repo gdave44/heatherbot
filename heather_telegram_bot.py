@@ -7736,6 +7736,136 @@ def _generate_photo_caption(chat_id: int, user_request: str, flux_prompt: str, i
     return random.choice(_CAPTION_FALLBACKS)
 
 
+# =============================================================================
+# SEXUAL ACT COMPOSITION DICTIONARY
+# Maps colloquial user phrases → precise image composition guidance for FLUX.
+# Each entry is (keywords_list, composition_instruction).
+# The first matching entry wins; order from most-specific to least-specific.
+# =============================================================================
+_SEXUAL_ACT_GLOSSARY: list[tuple[list[str], str]] = [
+    # ── Anal ──────────────────────────────────────────────────────────────────
+    (["finger in your ass", "finger in my ass", "fingering your ass", "finger up your ass",
+      "finger in her ass", "fingering her ass"],
+     "woman on all fours or lying face-down with hips raised, one hand reaching behind, "
+     "a single finger partially inserted into the anus, rear three-quarter view, "
+     "cheeks spread slightly, close-medium shot"),
+
+    (["two fingers in your ass", "two fingers up your ass"],
+     "woman on all fours, hips elevated, two fingers inserted into the anus from behind, "
+     "rear view, intimate close-medium framing"),
+
+    (["show your asshole", "show me your asshole", "show your ass hole",
+      "showing your asshole", "spread your ass", "spread her ass",
+      "open your ass", "expose your ass"],
+     "woman bent forward at the waist or on all fours, buttocks elevated and cheeks manually "
+     "spread apart with both hands, anus fully exposed and centered in frame, "
+     "rear close-up shot, soft natural lighting"),
+
+    (["ass in the air", "ass up", "butt in the air", "booty in the air",
+      "hips up", "hips in the air"],
+     "woman face-down on a surface (bed/floor) with hips and buttocks raised high, "
+     "head and chest lowered, knees bent, rear elevated prominently in frame, "
+     "rear-angle medium shot"),
+
+    (["plug in your ass", "butt plug", "anal plug"],
+     "woman bent over or kneeling, small anal plug visibly inserted, "
+     "rear view, intimate framing"),
+
+    # ── Vaginal fingering / rubbing ───────────────────────────────────────────
+    (["fingering your pussy", "fingering herself", "finger your pussy",
+      "finger inside you", "fingers inside you", "finger inside her pussy",
+      "two fingers in your pussy", "fingers in your pussy"],
+     "woman reclined or lying back, legs spread, one or two fingers inserted into the vagina, "
+     "hand visible between thighs, close-medium shot from the side or front angle, "
+     "expression of pleasure"),
+
+    (["rubbing your pussy", "rubbing herself", "rub your pussy",
+      "touching your pussy", "touching herself", "playing with your pussy",
+      "touching her pussy", "rubbing her clit", "rubbing your clit",
+      "fingering your clit", "flicking your clit"],
+     "woman reclined with legs spread or knees bent, fingers pressing and rubbing against "
+     "the vulva and clitoris, hand clearly visible on pubic area, "
+     "front or slight side angle, soft lighting, expression of pleasure"),
+
+    (["legs spread", "spread your legs", "spread her legs", "legs open",
+      "open your legs"],
+     "woman seated or lying on her back with legs spread wide apart, "
+     "full frontal view, intimate framing showing inner thighs and vulva"),
+
+    # ── Oral / blowjob ────────────────────────────────────────────────────────
+    (["sucking his cock", "blowing him", "giving him head", "on your knees sucking",
+      "suck his cock", "suck him off", "give him a blowjob", "blow job"],
+     "woman kneeling on floor in front of a standing man, face tilted upward "
+     "making eye contact with him, hands resting on his thighs, "
+     "anticipatory expression — imply the act through positioning and eye contact only, "
+     "face must NOT be in contact with or immediately adjacent to his genitals"),
+
+    (["deepthroat", "deep throat"],
+     "woman kneeling, head tilted back, neck extended, gazing upward at the man standing "
+     "above her, hands gripping his thighs, composition implies deep oral — "
+     "no face-genital contact shown directly"),
+
+    # ── Masturbation / solo ───────────────────────────────────────────────────
+    (["masturbating", "touching yourself", "playing with yourself",
+      "getting yourself off", "pleasuring yourself"],
+     "woman alone, reclined or lying back, one hand between her legs touching her vulva, "
+     "expression of pleasure, intimate solo framing"),
+
+    (["using a vibrator", "using a toy", "with a vibrator", "vibrator on your clit",
+      "vibrator on your pussy"],
+     "woman reclined, holding a small vibrator pressed against her vulva/clitoris, "
+     "legs parted, expression of pleasure, intimate framing"),
+
+    (["dildo in your pussy", "riding a dildo", "fucking yourself with a dildo"],
+     "woman straddling or inserting a dildo, seated or kneeling, "
+     "dildo visible between thighs, expression of pleasure"),
+
+    # ── Breast / nipple ───────────────────────────────────────────────────────
+    (["pinching your nipples", "pinching her nipples", "playing with your nipples",
+      "touching your nipples", "squeezing your tits", "squeezing her tits"],
+     "woman topless, hands cupping or fingers pinching her nipples, "
+     "front-facing medium shot, expression of sensation"),
+
+    (["showing your tits", "show me your tits", "show your boobs",
+      "show me your boobs", "flash your tits"],
+     "woman lifting or removing top, bare breasts exposed and prominent in frame, "
+     "front view, medium shot"),
+
+    # ── Positions / posing ────────────────────────────────────────────────────
+    (["doggy style", "doggy position", "on all fours", "on your hands and knees"],
+     "woman on all fours on a bed or floor, back arched, hips angled toward camera, "
+     "rear three-quarter view, buttocks and back visible"),
+
+    (["riding him", "on top of him", "cowgirl", "reverse cowgirl"],
+     "woman straddling a man lying on his back, seated upright on top of him, "
+     "hands on his chest or thighs, expression of pleasure, "
+     "side or front angle — no explicit penetration shown, implied by positioning"),
+
+    (["from behind", "taking it from behind", "bent over taking it"],
+     "woman bent over a surface (bed/table/counter) with a man positioned behind her, "
+     "rear or side angle, both figures visible, act implied by positioning — "
+     "no explicit penetration shown"),
+
+    (["spread eagle", "spreadeagle"],
+     "woman lying on her back, arms and legs spread wide apart, "
+     "full body front view, vulnerable open pose"),
+
+    (["showing your pussy", "show me your pussy", "show your cunt",
+      "spread your pussy", "open your pussy"],
+     "woman seated or reclined with legs spread, vulva exposed and centered in frame, "
+     "fingers optionally spreading labia slightly, front close-medium shot"),
+]
+
+
+def _get_sexual_act_guidance(user_request: str) -> str:
+    """Return composition guidance if the request matches a known sexual act phrase."""
+    req_lower = user_request.lower()
+    for keywords, guidance in _SEXUAL_ACT_GLOSSARY:
+        if any(kw in req_lower for kw in keywords):
+            return guidance
+    return ""
+
+
 def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal: Optional[dict] = None) -> tuple:
     """Ask the LLM to write a complete FLUX prompt AND determine if the scene is NSFW.
 
@@ -7906,6 +8036,13 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                 f"If the Scene asks for more revealing content than this limit allows, generate "
                 f"the scene at this maximum level instead.\n"
                 if max_reveal and max_reveal.get("hint") else ""
+            )
+            + (
+                f"\nACT COMPOSITION GUIDE — the Scene contains a known sexual act. "
+                f"Use this precise composition for the image:\n{_act_guidance}\n"
+                f"Incorporate this composition as the primary physical arrangement. "
+                f"All other prompt rules still apply.\n"
+                if (_act_guidance := _get_sexual_act_guidance(user_request if not _context_only_mode else "")) else ""
             )
         )
 
