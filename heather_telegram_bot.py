@@ -7551,30 +7551,37 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
             for m in history
         )
 
+        # Summarise what the user actually asked for so the model stays on topic
+        _request_summary = (
+            f"The user's photo request: \"{user_request}\"\n\n" if user_request and user_request != "__context_only__"
+            else "The user asked you to send a photo based on your conversation.\n\n"
+        )
+
         system_prompt = (
             f"{base_prompt}\n\n"
             f"You ARE {persona_name}. You are TEXTING right now. Write in FIRST PERSON (I, me, my).\n"
-            "The user just asked you to send a photo. You are about to take it.\n"
-            "Write ONE very short message (under 15 words) — like a quick text "
-            "you'd send while getting ready, building anticipation.\n\n"
+            f"{_request_summary}"
+            "You are about to take that photo and send it. Write ONE short text message "
+            "(10-20 words) — like a quick, natural text you'd send while getting ready. "
+            "It should acknowledge what they asked for and build a little anticipation.\n\n"
             "RULES:\n"
             f"- First person only: 'I', 'me', 'my' — NEVER say '{persona_name}' or refer to yourself by name\n"
             "- NEVER write in third person\n"
-            "- NEVER narrate or describe what is happening\n"
+            "- NEVER continue the sexual conversation — this is a 'hang on, snapping it now' message\n"
             "- No asterisk actions\n"
             "- 1 emoji max\n\n"
             "GOOD: 'give me a sec 😏'\n"
             "GOOD: 'oh you want that? hang on...'\n"
+            "GOOD: 'snapping it now, just for you'\n"
             f"BAD: '{persona_name} is getting ready to take the photo'\n"
-            "BAD: 'She grabbed her phone and started posing'"
+            "BAD: 'She grabbed her phone and started posing'\n"
+            "BAD: continuing dirty talk instead of acknowledging the photo request"
             + _name_context_snippet(chat_id)
         )
 
-        # Use conversation history for context rather than passing the explicit request
-        # directly — avoids triggering safety refusals in the underlying model.
-        user_content = "Write your response now."
+        user_content = "Write your quick 'taking the photo' text now. One short message only."
         if history_text.strip():
-            user_content = f"Recent conversation:\n{history_text.strip()}\n\nWrite your response now."
+            user_content = f"Recent conversation:\n{history_text.strip()}\n\nWrite your quick 'taking the photo' text now. One short message only."
 
         response = requests.post(
             TEXT_AI_ENDPOINT,
@@ -7584,8 +7591,8 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_content},
                 ],
-                "temperature": 0.9,
-                "max_tokens": 40,
+                "temperature": 0.85,
+                "max_tokens": 55,
                 "stream": False,
             },
             timeout=10,
@@ -7594,14 +7601,8 @@ def _generate_photo_status(chat_id: int, user_request: str) -> str:
         if response.status_code == 200:
             data = response.json()
             raw_text = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            # Take only the first sentence/line — prevents the LLM from leaking
-            # chain-of-thought or meta-instructions into the status message.
-            first_line = raw_text.split('\n')[0].strip()
-            # Further truncate at the first sentence break after 60 chars
-            import re as _re_st
-            sentence_match = _re_st.search(r'[.!?]\s', first_line[30:]) if len(first_line) > 30 else None
-            text = first_line[:30 + sentence_match.start() + 1] if sentence_match else first_line
-            text = text.strip().strip('"').strip("'")
+            # Take only the first line — no truncation beyond that
+            text = raw_text.split('\n')[0].strip().strip('"').strip("'")
             _refusal_signals = (
                 "i don't know how to", "as rebecca", "as luna", "as heather",
                 "i'm here to talk about", "i can't", "i cannot", "i'm not able",
