@@ -8283,22 +8283,26 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                 )
 
         # ── Family member detection — inject age/physical details when named in the scene ──
+        # Each entry: (display_name, description, [alias_words_that_trigger_this_person])
         _family_section = p.get('family', {})
-        _family_people = []
+        _family_people = []  # list of (display_name, description, [aliases])
 
-        # Children
+        # Children — match by first name AND generic role words (daughter, son, kid, child)
         for child in _family_section.get('children', []):
             _name = child.get('name', '').strip()
             if not _name:
                 continue
-            _parts = [f"child, age {child['age']}" if child.get('age') else "child"]
+            _age = child.get('age')
+            _parts = [f"child, age {_age}" if _age else "child"]
             if child.get('status'):
                 _parts.append(child['status'])
             if child.get('details'):
                 _parts.append(child['details'])
-            _family_people.append((_name, ', '.join(_parts)))
+            _aliases = [_name.lower(), "daughter", "son", "kid", "my daughter", "my son",
+                        "your daughter", "my kid", "your kid", "the kid", "child", "my child"]
+            _family_people.append((_name, ', '.join(_parts), _aliases))
 
-        # Husband / partner
+        # Husband / partner — match by name AND "husband", "my husband", "your husband"
         _husband = p.get('identity', {}).get('husband', {})
         _hname = _husband.get('name', '').strip()
         if _hname:
@@ -8309,7 +8313,9 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                 _h_parts.append(_husband['appearance'])
             if _husband.get('dynamic'):
                 _h_parts.append(_husband['dynamic'])
-            _family_people.append((_hname, ', '.join(_h_parts)))
+            _h_aliases = [_hname.lower(), "husband", "my husband", "your husband",
+                          "partner", "my partner", "significant other"]
+            _family_people.append((_hname, ', '.join(_h_parts), _h_aliases))
 
         # Any other relationships section
         for rel in p.get('relationships', []):
@@ -8320,14 +8326,22 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             if rel.get('role'):    _r_parts.append(rel['role'])
             if rel.get('age'):     _r_parts.append(f"age {rel['age']}")
             if rel.get('details'): _r_parts.append(rel['details'])
-            _family_people.append((_rname, ', '.join(_r_parts) if _r_parts else rel.get('role', 'person')))
+            _r_desc = ', '.join(_r_parts) if _r_parts else rel.get('role', 'person')
+            _r_aliases = [_rname.lower()]
+            if rel.get('role'):
+                _r_aliases.append(rel['role'].lower())
+            _family_people.append((_rname, _r_desc, _r_aliases))
 
-        # Check which names appear in the user request (case-insensitive)
+        # Check which family members appear in the user request via name OR role alias
         _req_lower = (user_request or '').lower()
-        _mentioned_family = [
-            (name, desc) for name, desc in _family_people
-            if name.lower() in _req_lower
-        ]
+        _seen_names: set = set()
+        _mentioned_family = []
+        for _fname, _fdesc, _faliases in _family_people:
+            if _fname in _seen_names:
+                continue
+            if any(_alias in _req_lower for _alias in _faliases):
+                _mentioned_family.append((_fname, _fdesc))
+                _seen_names.add(_fname)
 
         _family_people_block = ""
         if _mentioned_family:
@@ -8335,7 +8349,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             for _mname, _mdesc in _mentioned_family:
                 _ppl_lines.append(f"  - {_mname}: {_mdesc}")
             _family_people_block = (
-                "PEOPLE IN SCENE — the following named individuals are referenced in the Scene. "
+                "PEOPLE IN SCENE — the following individuals are referenced in the Scene. "
                 "Include their physical characteristics accurately in the prompt:\n"
                 + "\n".join(_ppl_lines)
                 + "\n"
