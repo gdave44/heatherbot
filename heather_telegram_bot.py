@@ -8361,7 +8361,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
         # Safety: if any detected family member is a minor, scene MUST be SFW
         _has_minor = False
         for _mname, _mdesc in _mentioned_family:
-            _m = _re_fam.search(r'\bage\s+(\d+)', _mdesc)
+            _m = re.search(r'\bage\s+(\d+)', _mdesc)
             if _m and int(_m.group(1)) < 18:
                 _has_minor = True
                 main_logger.info(f"[IMG_PROMPT] Minor detected ({_mname}, age {_m.group(1)}) — forcing SFW")
@@ -8516,11 +8516,10 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
 
         # Build a lookup: trigger words → age/descriptor phrase to force into the prompt
         # This is applied AFTER the LLM returns its prompt to guarantee ages survive.
-        import re as _re_fam
         _age_injections = []  # list of (set_of_trigger_words, age_phrase, age_num)
         for _fname, _fdesc, _faliases in _family_people:
             # Extract age from the description if present
-            _age_match = _re_fam.search(r'\bage\s+(\d+)', _fdesc)
+            _age_match = re.search(r'\bage\s+(\d+)', _fdesc)
             if _age_match:
                 _age_num = int(_age_match.group(1))
                 # Build a natural age phrase: child vs adult
