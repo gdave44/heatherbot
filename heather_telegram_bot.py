@@ -8431,13 +8431,26 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             _age_match = re.search(r'\bage\s+(\d+)', _fdesc)
             if _age_match:
                 _age_num = int(_age_match.group(1))
+                # Detect gender from description and alias list
+                _desc_and_aliases = (_fdesc + " " + " ".join(_faliases)).lower()
+                _is_male = any(w in _desc_and_aliases for w in ("son", "boy", "his", " he ", "male", "husband", "man"))
+                _is_female = any(w in _desc_and_aliases for w in ("daughter", "girl", "her", " she ", "female", "wife", "woman"))
+                # Default to female if ambiguous (most common case in this persona)
+                _male = _is_male and not _is_female
+
                 if _age_num < 18:
                     # Use keyword+shorthand format — models respond better to these than "X-year-old"
-                    if _age_num <= 12:
-                        _age_phrase = f"young girl, {_age_num}yo, preteen"
+                    if _male:
+                        if _age_num <= 12:
+                            _age_phrase = f"young boy, {_age_num}yo, preteen"
+                        else:
+                            _age_phrase = f"teenage boy, {_age_num}yo, teen"
                     else:
-                        _age_phrase = f"teenage girl, {_age_num}yo, teen"
-                elif "man" in _fdesc.lower() or "husband" in _fdesc.lower():
+                        if _age_num <= 12:
+                            _age_phrase = f"young girl, {_age_num}yo, preteen"
+                        else:
+                            _age_phrase = f"teenage girl, {_age_num}yo, teen"
+                elif _male:
                     _age_phrase = f"adult man, {_age_num}yo"
                 else:
                     _age_phrase = f"adult woman, {_age_num}yo"
