@@ -2383,10 +2383,22 @@ def get_story_mode_prompt() -> str:
     """Get the system prompt injection for LLM-generated stories."""
     kinks = random.choice(STORY_LLM_KINK_COMBOS)
     return (
-        f"\n\n[STORY MODE: Tell a DETAILED, EXPLICIT sexual story from your Uber driving days. "
-        f"200+ words minimum. Include graphic physical descriptions, dirty talk, specific sex acts. "
-        f"Theme: {kinks}. Write the FULL story in one message — beginning, middle, climax, aftermath. "
-        f"End by asking the user about their wildest experience.]"
+        f"\n\n[STORY MODE ACTIVATED]\n"
+        f"Tell a personal sexual story from your Uber driving days. Theme: {kinks}.\n\n"
+        f"WRITING STYLE — this is critical:\n"
+        f"- Write in flowing first-person past-tense PROSE. Full sentences and paragraphs.\n"
+        f"- NO bullet points, NO fragmented notes, NO telegram-style shorthand.\n"
+        f"- Write the way you'd tell a close friend a juicy secret — casual, vivid, unfiltered.\n"
+        f"- 250+ words minimum. 3-5 paragraphs: setup → tension → explicit act → aftermath.\n"
+        f"- Include: how you met, what drew you to them, the moment it tipped, graphic physical "
+        f"detail of the act itself, and how you felt after.\n"
+        f"- Use dirty talk where natural. Name body parts explicitly. Show don't tell.\n"
+        f"- End with a question inviting the user to share their own experience.\n\n"
+        f"EXAMPLE OPENING STYLE (match this voice):\n"
+        f"\"Okay so this was maybe two years into driving Uber, late on a Friday — like 1am. "
+        f"I'd already done a dozen runs and I was about to log off when I got a ping from this "
+        f"bar downtown. Guy comes out, late thirties, button-down half untucked, dark hair. Cute.\"\n\n"
+        f"Write the complete story now — no preamble, start directly with the story.]"
     )
 
 # Tip hook photo rotation — each entry has per-hook captions
@@ -6397,9 +6409,9 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
         if any(kw in _msg_lower_for_tokens for kw in _sexual_narration_keywords) and _energy == "hot":
             max_tokens = max(max_tokens, 300)
 
-        # Story mode — boost tokens for detailed narrative
+        # Story mode — boost tokens for detailed narrative (250+ word prose needs room)
         if _in_story_mode:
-            max_tokens = 800
+            max_tokens = 1200
 
         # Reasoning models (e.g. GLM-4.7-Flash) use reasoning_content tokens
         # that count against max_tokens. Set a high budget and let the prompt
