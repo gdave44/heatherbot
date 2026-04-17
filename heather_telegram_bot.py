@@ -8432,9 +8432,15 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             if _age_match:
                 _age_num = int(_age_match.group(1))
                 if _age_num < 18:
-                    _age_phrase = f"{_age_num}-year-old girl"
+                    # Use keyword+shorthand format — models respond better to these than "X-year-old"
+                    if _age_num <= 12:
+                        _age_phrase = f"young girl, {_age_num}yo, preteen"
+                    else:
+                        _age_phrase = f"teenage girl, {_age_num}yo, teen"
+                elif "man" in _fdesc.lower() or "husband" in _fdesc.lower():
+                    _age_phrase = f"adult man, {_age_num}yo"
                 else:
-                    _age_phrase = f"{_age_num}-year-old man" if "man" in _fdesc.lower() else f"{_age_num}-year-old adult"
+                    _age_phrase = f"adult woman, {_age_num}yo"
                 _age_injections.append((set(_faliases), _age_phrase, _age_num))
 
         def _enforce_family_ages(flux_prompt: str) -> str:
