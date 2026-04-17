@@ -8282,6 +8282,68 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                     "Avoid settings or props that would feel out of character for a parent at home.\n\n"
                 )
 
+        # ── Family member detection — inject age/physical details when named in the scene ──
+        _family_section = p.get('family', {})
+        _family_people = []
+
+        # Children
+        for child in _family_section.get('children', []):
+            _name = child.get('name', '').strip()
+            if not _name:
+                continue
+            _parts = [f"child, age {child['age']}" if child.get('age') else "child"]
+            if child.get('status'):
+                _parts.append(child['status'])
+            if child.get('details'):
+                _parts.append(child['details'])
+            _family_people.append((_name, ', '.join(_parts)))
+
+        # Husband / partner
+        _husband = p.get('identity', {}).get('husband', {})
+        _hname = _husband.get('name', '').strip()
+        if _hname:
+            _h_parts = ["husband, adult man"]
+            if _husband.get('age'):
+                _h_parts[0] = f"husband, adult man, age {_husband['age']}"
+            if _husband.get('appearance'):
+                _h_parts.append(_husband['appearance'])
+            if _husband.get('dynamic'):
+                _h_parts.append(_husband['dynamic'])
+            _family_people.append((_hname, ', '.join(_h_parts)))
+
+        # Any other relationships section
+        for rel in p.get('relationships', []):
+            _rname = rel.get('name', '').strip()
+            if not _rname:
+                continue
+            _r_parts = []
+            if rel.get('role'):    _r_parts.append(rel['role'])
+            if rel.get('age'):     _r_parts.append(f"age {rel['age']}")
+            if rel.get('details'): _r_parts.append(rel['details'])
+            _family_people.append((_rname, ', '.join(_r_parts) if _r_parts else rel.get('role', 'person')))
+
+        # Check which names appear in the user request (case-insensitive)
+        _req_lower = (user_request or '').lower()
+        _mentioned_family = [
+            (name, desc) for name, desc in _family_people
+            if name.lower() in _req_lower
+        ]
+
+        _family_people_block = ""
+        if _mentioned_family:
+            _ppl_lines = []
+            for _mname, _mdesc in _mentioned_family:
+                _ppl_lines.append(f"  - {_mname}: {_mdesc}")
+            _family_people_block = (
+                "PEOPLE IN SCENE — the following named individuals are referenced in the Scene. "
+                "Include their physical characteristics accurately in the prompt:\n"
+                + "\n".join(_ppl_lines)
+                + "\n"
+                "Integrate their age and description naturally into the prompt the same way "
+                "you integrate the main character's physical details.\n\n"
+            )
+            main_logger.info(f"[IMG_PROMPT] Family member(s) detected in scene: {[n for n,_ in _mentioned_family]}")
+
         # ── System prompt ──
         system_prompt = (
             "You are an expert ComfyUI/FLUX image prompt writer. "
@@ -8290,6 +8352,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             f"CHARACTER — integrate ALL physical details naturally into the prompt:\n"
             f"{char_block}\n\n"
             + (_family_img_block if _family_img_block else "")
+            + (_family_people_block if _family_people_block else "")
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
             + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
             "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
