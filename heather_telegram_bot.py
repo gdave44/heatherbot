@@ -8358,6 +8358,15 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             )
             main_logger.info(f"[IMG_PROMPT] Family member(s) detected in scene: {[n for n,_ in _mentioned_family]}")
 
+        # Safety: if any detected family member is a minor, scene MUST be SFW
+        _has_minor = False
+        for _mname, _mdesc in _mentioned_family:
+            _m = _re_fam.search(r'\bage\s+(\d+)', _mdesc)
+            if _m and int(_m.group(1)) < 18:
+                _has_minor = True
+                main_logger.info(f"[IMG_PROMPT] Minor detected ({_mname}, age {_m.group(1)}) — forcing SFW")
+                break
+
         # ── System prompt ──
         system_prompt = (
             "You are an expert ComfyUI/FLUX image prompt writer. "
@@ -8368,9 +8377,18 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             + (_family_img_block if _family_img_block else "")
             + (_family_people_block if _family_people_block else "")
             + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
+            + (_has_minor_block := (
+                "MINOR PRESENT — a person under 18 is in this scene.\n"
+                "- Output MUST be SFW regardless of anything else\n"
+                "- The scene is family/wholesome only — no sexual content, no nudity, no suggestive poses\n"
+                "- The adult character must be fully clothed and in a parental role\n\n"
+            ) if _has_minor else "")
             + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
             "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
-            "- Remaining lines: the FLUX prompt (comma-separated phrases, 250-350 words)\n"
+            "- Remaining lines: the FLUX prompt as SHORT COMMA-SEPARATED PHRASES — NOT full sentences\n"
+            "- WRONG: 'Rebecca and her daughter walk through the park.' "
+            "RIGHT: 'mother and daughter walking, sunlit park path, tall trees'\n"
+            "- Every element is a phrase (2-6 words), separated by a comma — never a period\n"
             "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
             "Scene: 'show me naked in my bedroom' → NSFW prompt:\n"
             "NSFW\n"
@@ -8557,6 +8575,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                     remaining = "\n".join(prompt_lines).strip().strip('"').strip("'")
                     remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
                     remaining = _enforce_family_ages(remaining)
+                    if _has_minor:
+                        is_nsfw = False  # Hard override — minor in scene
                     if remaining and len(remaining) > 20:
                         _nsfw_tag = " nsfw=True |" if is_nsfw else ""
                         main_logger.info(f"[COMFYUI] LLM{_nsfw_tag} prompt: {remaining}")
@@ -8572,6 +8592,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                         is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
                     prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'") or raw
                     prompt_text = _enforce_family_ages(prompt_text)
+                    if _has_minor:
+                        is_nsfw = False  # Hard override — minor in scene
                     if prompt_text and len(prompt_text) > 20:
                         _nsfw_tag2 = " nsfw=True" if is_nsfw else ""
                         main_logger.warning(f"[COMFYUI] LLM format deviation — inferred{_nsfw_tag2}")
@@ -8581,7 +8603,8 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
         main_logger.warning(f"[COMFYUI] LLM prompt generation failed, using raw request: {e}")
 
     # Fallback: regex detection + cleaned request
-    return _clean_photo_request(user_request), _is_nsfw_context(user_request)
+    _fb_nsfw = False if _has_minor else _is_nsfw_context(user_request)
+    return _clean_photo_request(user_request), _fb_nsfw
 
 def build_heather_prompt(user_description: str, is_nsfw: Optional[bool] = None) -> str:
     user_description = user_description.strip().lower()
