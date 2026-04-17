@@ -354,6 +354,20 @@ class PersonalityLoader:
             self._load_defaults()
             return False
 
+    @property
+    def persona_path(self) -> Path:
+        return self.yaml_path
+
+    def reload(self) -> bool:
+        """Reload personality from disk without normalising — used after learned_details update."""
+        try:
+            with open(self.yaml_path, 'r', encoding='utf-8') as f:
+                self.personality = yaml.safe_load(f) or {}
+            return True
+        except Exception as e:
+            main_logger.warning(f"[PERSONA] Hot-reload failed: {e}")
+            return False
+
     def _load_defaults(self):
         """Load hardcoded defaults if YAML fails"""
         self.personality = {
@@ -6116,7 +6130,15 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
                 if _family_awareness_raw else ""
             )
 
-            system_content = system_prompt + texting_instruction + state_context + time_context + gap_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context + family_context
+            # Learned details — facts the model invented in prior conversations, now persisted
+            _learned = personality.personality.get('learned_details', [])
+            learned_context = (
+                "\n\n[DETAILS YOU'VE MENTIONED IN PAST CONVERSATIONS — stay consistent with these:\n"
+                + "\n".join(f"- {f}" for f in _learned)
+                + "]"
+            ) if _learned else ""
+
+            system_content = system_prompt + texting_instruction + state_context + time_context + gap_context + variety_context + steering_context + backstory_context + gender_context + name_context + lust_context + family_context + learned_context
 
             # Wind-down detection — _winding_down already set above the if/else
             if _winding_down:
@@ -7878,6 +7900,147 @@ def _get_sexual_act_guidance(user_request: str) -> str:
         if any(kw in req_lower for kw in keywords):
             return guidance
     return ""
+
+
+# =============================================================================
+# PERSONA SELF-LEARNING — extract invented details and persist to YAML
+# =============================================================================
+_persona_facts_lock = threading.Lock()
+
+def _get_existing_persona_text() -> str:
+    """Return a condensed text snapshot of the current persona for dedup comparison."""
+    p = personality.personality
+    chunks = []
+    # Walk all string/list values recursively to build a flat text blob
+    def _walk(obj):
+        if isinstance(obj, str):
+            chunks.append(obj)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                _walk(v)
+    _walk(p)
+    # Also include already-learned details
+    for fact in p.get('learned_details', []):
+        chunks.append(fact)
+    return " ".join(chunks).lower()
+
+
+def _save_learned_facts(facts: list[str]) -> None:
+    """Append new facts to the learned_details list in the persona YAML file."""
+    if not facts:
+        return
+    persona_path = personality.persona_path
+    with _persona_facts_lock:
+        try:
+            with open(persona_path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+            existing = data.get('learned_details', [])
+            existing_lower = {f.lower().strip() for f in existing}
+            added = []
+            for fact in facts:
+                fact = fact.strip().strip('-').strip()
+                if fact and fact.lower() not in existing_lower:
+                    existing.append(fact)
+                    existing_lower.add(fact.lower())
+                    added.append(fact)
+            if not added:
+                return
+            data['learned_details'] = existing
+            with open(persona_path, 'w') as f:
+                yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            # Reload so the running persona picks up the new facts
+            personality.reload()
+            main_logger.info(f"[PERSONA_LEARN] Saved {len(added)} new fact(s): {added}")
+        except Exception as e:
+            main_logger.warning(f"[PERSONA_LEARN] Failed to save facts: {e}")
+
+
+async def _extract_and_save_persona_facts(response: str, chat_id: int) -> None:
+    """Background task: extract any new discernable persona details from a response
+    and persist them to the YAML if they aren't already there."""
+    # Skip very short responses — nothing worth extracting
+    if len(response.split()) < 8:
+        return
+    # Skip if response looks like a refusal or system message
+    if contains_character_violation(response):
+        return
+
+    loop = asyncio.get_event_loop()
+    try:
+        facts = await loop.run_in_executor(None, lambda: _llm_extract_persona_facts(response))
+        if facts:
+            await loop.run_in_executor(None, lambda: _save_learned_facts(facts))
+    except Exception as e:
+        main_logger.debug(f"[PERSONA_LEARN] Extraction error: {e}")
+
+
+def _llm_extract_persona_facts(response: str) -> list[str]:
+    """Ask the LLM to identify any new specific persona details invented in this response."""
+    try:
+        existing_text = _get_existing_persona_text()
+        persona_name = personality.name
+
+        system_prompt = (
+            f"You are a persona continuity tracker for a character named {persona_name}.\n"
+            "Your job is to extract NEW, SPECIFIC, DISCERNABLE details that the character "
+            "invented about themselves in a message — details that are concrete enough to "
+            "remember and reuse for consistency.\n\n"
+            "WHAT TO EXTRACT (specific, reusable facts):\n"
+            "- Named locations: restaurants, bars, gyms, parks, neighbourhoods, streets\n"
+            "- Named people: friends, coworkers, acquaintances (not the main family already in profile)\n"
+            "- Specific hobbies, habits, or routines not already known\n"
+            "- Specific memories or past events with concrete details\n"
+            "- Preferences: specific foods, drinks, music artists, shows, books\n"
+            "- Physical details: tattoos, piercings, scars, specific clothing items she owns\n"
+            "- Pet names, vehicle details, home decor details\n\n"
+            "WHAT TO IGNORE:\n"
+            "- Vague or generic statements ('I like coffee', 'I enjoy hiking')\n"
+            "- Emotional states, moods, or conversational filler\n"
+            "- Sexual acts or explicit content\n"
+            "- Anything already in the existing profile (listed below)\n\n"
+            f"EXISTING PROFILE CONTENT (do NOT re-extract anything already here):\n"
+            f"{existing_text[:2000]}\n\n"
+            "OUTPUT FORMAT:\n"
+            "If you find NEW facts: return them one per line, each as a short declarative "
+            "sentence starting with the character's name. Example:\n"
+            f"{persona_name} has a favorite Thai restaurant called Lotus Garden on Burnside.\n"
+            f"{persona_name} has a coworker named Tanya who covers her shifts sometimes.\n"
+            "If you find NO new facts worth saving: return exactly the word NONE."
+        )
+
+        user_content = f"Message to analyze:\n\"{response}\""
+
+        r = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 200,
+                "stream": False,
+            },
+            timeout=20,
+        )
+
+        if r.status_code != 200:
+            return []
+
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        if raw.upper() == "NONE" or not raw:
+            return []
+
+        facts = [line.strip() for line in raw.splitlines() if line.strip() and line.upper() != "NONE"]
+        return facts[:5]  # Cap at 5 facts per response to avoid runaway additions
+
+    except Exception as e:
+        main_logger.debug(f"[PERSONA_LEARN] LLM extraction failed: {e}")
+        return []
 
 
 _PHOTO_CONFUSION_FALLBACKS = [
@@ -11053,6 +11216,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Increment turn counter for proactive photo tracking
         conversation_turn_count[chat_id] = conversation_turn_count.get(chat_id, 0) + 1
+
+        # Fire-and-forget persona fact extraction — runs in background, never delays response
+        asyncio.create_task(_extract_and_save_persona_facts(response, chat_id))
 
         # Track content promises — if the response teases sending media, mark for follow-through
         response_lower = response.lower()
