@@ -8496,6 +8496,46 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
             timeout=20,
         )
 
+        # Build a lookup: trigger words → age/descriptor phrase to force into the prompt
+        # This is applied AFTER the LLM returns its prompt to guarantee ages survive.
+        import re as _re_fam
+        _age_injections = []  # list of (set_of_trigger_words, age_phrase, age_num)
+        for _fname, _fdesc, _faliases in _family_people:
+            # Extract age from the description if present
+            _age_match = _re_fam.search(r'\bage\s+(\d+)', _fdesc)
+            if _age_match:
+                _age_num = int(_age_match.group(1))
+                # Build a natural age phrase: child vs adult
+                if _age_num < 18:
+                    _age_phrase = f"{_age_num}-year-old girl" if "girl" not in _fdesc.lower() else f"{_age_num}-year-old child"
+                else:
+                    _age_phrase = f"{_age_num}-year-old man" if "man" in _fdesc.lower() else f"{_age_num}-year-old adult"
+                _age_injections.append((set(_faliases), _age_phrase, _age_num))
+
+        def _enforce_family_ages(flux_prompt: str) -> str:
+            """Splice age descriptors into the FLUX prompt for any detected family members."""
+            if not _age_injections:
+                return flux_prompt
+            phrases = [ph.strip() for ph in flux_prompt.split(',')]
+            for _triggers, _age_phrase, _age_num in _age_injections:
+                # Skip if the age number already appears in the prompt
+                if str(_age_num) in flux_prompt:
+                    continue
+                # Find the first phrase that contains any trigger word
+                insert_after = -1
+                for i, ph in enumerate(phrases):
+                    if any(t in ph.lower() for t in _triggers):
+                        insert_after = i
+                        break
+                if insert_after >= 0:
+                    phrases.insert(insert_after + 1, _age_phrase)
+                    main_logger.info(f"[IMG_PROMPT] Enforced age in prompt: '{_age_phrase}' after phrase {insert_after}")
+                else:
+                    # Trigger word not found in prompt — prepend so age is always present
+                    phrases.insert(0, _age_phrase)
+                    main_logger.info(f"[IMG_PROMPT] Prepended age to prompt: '{_age_phrase}'")
+            return ', '.join(phrases)
+
         if response.status_code == 200:
             data = response.json()
             raw = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
@@ -8516,6 +8556,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                         prompt_lines.append(_pl)
                     remaining = "\n".join(prompt_lines).strip().strip('"').strip("'")
                     remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
+                    remaining = _enforce_family_ages(remaining)
                     if remaining and len(remaining) > 20:
                         _nsfw_tag = " nsfw=True |" if is_nsfw else ""
                         main_logger.info(f"[COMFYUI] LLM{_nsfw_tag} prompt: {remaining}")
@@ -8530,6 +8571,7 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                     else:
                         is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
                     prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'") or raw
+                    prompt_text = _enforce_family_ages(prompt_text)
                     if prompt_text and len(prompt_text) > 20:
                         _nsfw_tag2 = " nsfw=True" if is_nsfw else ""
                         main_logger.warning(f"[COMFYUI] LLM format deviation — inferred{_nsfw_tag2}")
