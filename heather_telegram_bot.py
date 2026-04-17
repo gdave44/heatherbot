@@ -2210,6 +2210,71 @@ def get_conversation_steering_context(chat_id: int) -> str:
 # STORY MODE — Pre-written explicit Uber stories + LLM-generated fallback
 # ============================================================================
 
+_story_save_lock = threading.Lock()
+
+def _save_llm_story(story_text: str) -> None:
+    """Persist an LLM-generated story to heather_stories.yaml, creating the file if missing."""
+    if not story_text or len(story_text.split()) < 50:
+        return  # Too short to be a real story
+    try:
+        with _story_save_lock:
+            # Load existing data or start fresh
+            if os.path.exists(STORIES_FILE):
+                with open(STORIES_FILE, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f) or {}
+            else:
+                data = {}
+
+            stories = data.get('stories', {})
+
+            # Generate a unique key: llm_YYYYMMDD_HHMMSS
+            from datetime import datetime as _dt
+            key = f"llm_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+            while key in stories:
+                key += '_x'
+
+            # Sniff kink tags from the text
+            _kink_map = {
+                'blowjob': ['blowjob', 'blow job', 'sucked', 'went down on', 'on my knees'],
+                'anal':    ['ass', 'anal', 'from behind'],
+                'oral':    ['oral', 'tongue', 'licking', 'eaten out'],
+                'riding':  ['on top', 'riding', 'straddled', 'cowgirl'],
+                'hotel':   ['hotel', 'room key', 'minibar', 'lobby'],
+                'car sex': ['backseat', 'back seat', 'parking', 'car', 'uber'],
+                'massage': ['massage', 'table', 'spa', 'oil'],
+                'quickie': ['quickie', 'quick', 'fast', 'rushed'],
+                'stranger':['stranger', 'never met', "didn't know"],
+                'outdoor': ['parking lot', 'outside', 'outdoor', 'alley'],
+                'creampie':['inside', 'creampie', 'filled'],
+                'deepthroat':['deepthroat', 'deep throat', 'throat'],
+            }
+            story_lower = story_text.lower()
+            detected_kinks = [tag for tag, keywords in _kink_map.items()
+                              if any(kw in story_lower for kw in keywords)]
+
+            stories[key] = {
+                'kinks': detected_kinks or ['explicit'],
+                'content': story_text.strip(),
+            }
+            data['stories'] = stories
+
+            with open(STORIES_FILE, 'w', encoding='utf-8') as f:
+                yaml.dump(data, f, allow_unicode=True, default_flow_style=False,
+                          sort_keys=False, width=120)
+
+            # Hot-reload the story bank so the new story enters rotation immediately
+            global _story_bank
+            _story_bank = [
+                {'key': k, 'kinks': v.get('kinks', []), 'content': v.get('content', '').strip()}
+                for k, v in stories.items()
+                if v.get('content', '').strip()
+            ]
+
+            main_logger.info(f"[STORY] Saved LLM story as '{key}' | kinks={detected_kinks} | words={len(story_text.split())}")
+    except Exception as e:
+        main_logger.warning(f"[STORY] Failed to save LLM story: {e}")
+
+
 def load_story_bank() -> list:
     """Load pre-written stories from YAML file."""
     global _story_bank
@@ -9660,16 +9725,15 @@ async def handle_testtip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "Failed to send invoice — check logs")
 
 async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin cheat: simulate a tip to test character warmth changes.
+    """Admin cheat: simulate a tip, set lust, or force a story.
 
     Usage:
-      /hubaloo tip 50      — simulate a 50-star tip to your own chat
-      /hubaloo tip 50 789  — simulate a 50-star tip to chat_id 789
-      /hubaloo tip         — defaults to 50 stars
-
-    The command calls the same path as a real payment: record_tip_received()
-    boosts warmth, clears decline state, and the bot sends the thank-you reply
-    injected into conversation context — exactly as if a real tip arrived.
+      /hubaloo tip 50        — simulate a 50-star tip to your own chat
+      /hubaloo tip 50 789    — simulate a 50-star tip to chat_id 789
+      /hubaloo lust <0-100>  — directly set lust score
+      /hubaloo story         — force a story (random banked or LLM)
+      /hubaloo story llm     — force an LLM-generated story
+      /hubaloo story banked  — force a banked story
     """
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id if update.effective_user else chat_id
@@ -9712,6 +9776,63 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Lust score for chat {lust_target} set to {lust_val:.0f}/100 → tier: {tier} | reveal: {reveal['label']}"
         )
         main_logger.info(f"[CHEAT] /hubaloo lust: set {lust_target} → {lust_val:.1f} ({tier})")
+        return
+
+    # ── story subcommand ─────────────────────────────────────────────────────
+    # /hubaloo story [llm|banked]  — force a story to the admin's own chat
+    if args and args[0].lower() == "story":
+        mode_arg = args[1].lower() if len(args) > 1 else "random"
+        story_target = chat_id
+
+        if mode_arg in ("llm", "random") and mode_arg != "banked":
+            if mode_arg == "llm" or not _story_bank:
+                # Force LLM generation
+                _story_mode_active[story_target] = True
+                dyn = get_conversation_dynamics(story_target)
+                story_last_served[story_target] = dyn['msg_count']
+                await context.bot.send_message(chat_id, "⚙️ Forcing LLM-generated story — sending now...")
+                main_logger.info(f"[HUBALOO] Forced LLM story for {story_target}")
+
+                # Generate and send via the normal response path
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: get_text_ai_response(story_target, "[tell me a story]", request_id="hubaloo_story")
+                )
+                if response:
+                    await context.bot.send_message(story_target, response)
+                    store_message(story_target, "Heather", response)
+                    asyncio.create_task(asyncio.get_event_loop().run_in_executor(
+                        None, lambda: _save_llm_story(response)
+                    ))
+                    main_logger.info(f"[HUBALOO] LLM story sent and queued for save ({len(response.split())} words)")
+                else:
+                    await context.bot.send_message(chat_id, "⚠️ LLM returned empty response.")
+                return
+            # fall through to banked if mode_arg == "random" and bank is empty
+
+        # Banked story (or random fallback)
+        if _story_bank:
+            served = stories_served_to_user.get(story_target, set())
+            available = [s for s in _story_bank if s['key'] not in served]
+            if not available:
+                served.clear()
+                available = list(_story_bank)
+                main_logger.info(f"[HUBALOO] Story rotation reset for {story_target}")
+
+            story = random.choice(available)
+            dyn = get_conversation_dynamics(story_target)
+            story_last_served[story_target] = dyn['msg_count']
+            if story_target not in stories_served_to_user:
+                stories_served_to_user[story_target] = set()
+            stories_served_to_user[story_target].add(story['key'])
+
+            await context.bot.send_message(story_target, story['content'])
+            store_message(story_target, "Heather", story['content'])
+            main_logger.info(f"[HUBALOO] Forced banked story '{story['key']}' for {story_target}")
+            await context.bot.send_message(chat_id, f"✅ Sent banked story: `{story['key']}`", parse_mode="Markdown")
+        else:
+            await context.bot.send_message(chat_id, "⚠️ No banked stories available. Use `/hubaloo story llm` instead.", parse_mode="Markdown")
         return
 
     # ── tip subcommand (original behavior) ──────────────────────────────────
@@ -11085,6 +11206,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         read_delay = calculate_read_delay(user_message)
         await asyncio.sleep(read_delay + extra_delay)
 
+    # Capture story mode flag before get_text_ai_response() pops it internally
+    _was_story_mode = _story_mode_active.get(chat_id, False)
+
     # Generate AI response (with typing indicator)
     async def _generate_response(retry_for_duplicate: int = 0):
         start = time.time()
@@ -11219,6 +11343,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Fire-and-forget persona fact extraction — runs in background, never delays response
         asyncio.create_task(_extract_and_save_persona_facts(response, chat_id))
+
+        # If this response was an LLM-generated story, save it to the story bank
+        if _was_story_mode:
+            asyncio.create_task(asyncio.get_event_loop().run_in_executor(
+                None, lambda: _save_llm_story(response)
+            ))
 
         # Track content promises — if the response teases sending media, mark for follow-through
         response_lower = response.lower()
