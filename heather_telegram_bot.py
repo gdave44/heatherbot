@@ -124,6 +124,7 @@ TEXT_AI_ENDPOINT = f"{LLM_URL}/v1/chat/completions"
 
 MODEL_NAME = os.getenv("MODEL", "dolphin-llama3:8b")
 VISION_MODEL_NAME = os.getenv("VISION_MODEL", "llava:7b-v1.6-mistral-q4_0")
+PROMPT_GEN_MODEL = os.getenv("PROMPT_GEN_MODEL", "brxce/stable-diffusion-prompt-generator")
 
 if not BOT_TOKEN:
     print("ERROR: TELEGRAM_BOT_TOKEN must be set in .env or environment")
@@ -259,6 +260,7 @@ def log_startup_urls():
     logger.info("=== MODEL CONFIGURATION ===")
     logger.info(f"TEXT_MODEL: {MODEL_NAME}")
     logger.info(f"VISION_MODEL: {VISION_MODEL_NAME}")
+    logger.info(f"PROMPT_GEN_MODEL: {PROMPT_GEN_MODEL}")
     logger.info("================================")
 
 log_startup_urls()
@@ -8367,164 +8369,14 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                 main_logger.info(f"[IMG_PROMPT] Minor detected ({_mname}, age {_m.group(1)}) — forcing SFW")
                 break
 
-        # ── System prompt ──
-        system_prompt = (
-            "You are an expert ComfyUI/FLUX image prompt writer. "
-            "FLUX is a photorealistic text-to-image model that responds best to "
-            "natural, comma-separated descriptive phrases — NOT sentences.\n\n"
-            f"CHARACTER — integrate ALL physical details naturally into the prompt:\n"
-            f"{char_block}\n\n"
-            + (_family_img_block if _family_img_block else "")
-            + (_family_people_block if _family_people_block else "")
-            + (f"CHARACTER LIFESTYLE (use to infer settings when not specified):\n{setting_block}\n\n" if setting_block else "")
-            + (_has_minor_block := (
-                "MINOR PRESENT — a person under 18 is in this scene.\n"
-                "- Output MUST be SFW regardless of anything else\n"
-                "- The scene is family/wholesome only — no sexual content, no nudity, no suggestive poses\n"
-                "- The adult character must be fully clothed and in a parental role\n\n"
-            ) if _has_minor else "")
-            + "OUTPUT FORMAT — your entire response must be exactly two parts with no labels:\n"
-            "- First line: one word only, no punctuation, no label — write NSFW or SFW\n"
-            "- Remaining lines: the FLUX prompt as SHORT COMMA-SEPARATED PHRASES — NOT full sentences\n"
-            "- WRONG: 'Rebecca and her daughter walk through the park.' "
-            "RIGHT: 'mother and daughter walking, sunlit park path, tall trees'\n"
-            "- Every element is a phrase (2-6 words), separated by a comma — never a period\n"
-            "EXAMPLES — follow this format exactly (scene/action FIRST, character details after):\n"
-            "Scene: 'show me naked in my bedroom' → NSFW prompt:\n"
-            "NSFW\n"
-            "bedroom, woman standing beside bed fully nude, soft warm lamplight, 33-year-old woman, long brunette hair loose over shoulders, brown eyes, confident expression, hands resting at sides, natural lighting, amateur photo\n\n"
-            "Scene: 'show me on the massage table' → SFW prompt:\n"
-            "SFW\n"
-            "massage table, woman lying on massage table, massage studio, 33-year-old woman, long brunette hair, brown eyes, relaxed expression, soft ambient lighting, amateur photo\n\n"
-            "SETTING INFERENCE RULES (apply when the scene doesn't state a location):\n"
-            f"- If the scene mentions a customer, client, or patient → set the scene at {work_setting}\n"
-            "- If the scene only mentions a man, woman, guy, girl, or him/her with no role → setting can be any of her typical locations\n"
-            "- If the scene is solo (only the character, no other person) → use a personal location: bedroom, bathroom, living room, home — NOT the workplace\n"
-            "- If the scene explicitly states a location → always use that location\n"
-            "- NEVER carry a location over from conversation history — only use the location the Scene request specifies or infer fresh from the rules above\n\n"
-            "SFW/NSFW CLASSIFICATION — read the Scene text only, ignore conversation history:\n"
-            "- NSFW = the scene shows nudity: exposed genitals (pussy, ass), bare breasts/nipples, "
-            "or a fully or partially nude body. Nudity alone is the only trigger.\n"
-            "- SFW = clothed, swimwear, lingerie (covered), suggestive poses without nudity.\n"
-            "- 'naked' / 'nude' / 'topless' / 'bare' / 'no clothes' → NSFW\n"
-            "- 'in the bath' → SFW. 'naked in the bath' → NSFW.\n"
-            "- 'topless selfie' → NSFW. 'bikini selfie' → SFW. 'lingerie' → SFW.\n"
-            "- 'at the grocery store' / 'at the park' / 'massage table' / 'working out' → SFW\n"
-            "- If the Scene text contains no nudity words → SFW, full stop.\n"
-            "- When in doubt: SFW\n\n"
-            "SEXUAL ACTIVITY RULE — this is critical:\n"
-            "- Do NOT generate any sexual acts — no penetration, no oral sex, no handjobs, "
-            "no fingering, no masturbation, no sex toys in use. If the scene request asks for "
-            "a sexual act, ignore the act and generate a nude or suggestive pose instead.\n"
-            "- NSFW scenes show nudity only: bodies posed nude or partially nude — "
-            "NOT performing any sexual act.\n"
-            "- MALE NUDITY: if a man is present in a nude scene, his penis is ALWAYS "
-            "described as soft/flaccid — never erect, never semi-erect, unless the scene "
-            "text explicitly uses the word 'erect' or 'erection'. 'Letting it all hang out', "
-            "'nudist', 'naked', 'nude' — all default to soft/flaccid. "
-            "Use natural terms (soft cock, flaccid penis). "
-            "A visible flaccid penis is nudity, not a sexual act — it is valid.\n\n"
-            "PROMPT RULES:\n"
-            "- Comma-separated phrases, not prose sentences\n"
-            "- ORDER MATTERS: start with the scene/setting from the Scene request, "
-            "then weave in character physical details — NEVER lead with character description\n"
-            "- The Scene request is the PRIMARY requirement. Character description is secondary.\n"
-            "- HISTORY ISOLATION: conversation history is context only. NEVER import props, "
-            "people, or locations from history unless the Scene request mentions them.\n"
-            "- SOLO SCENES: if no other person is mentioned in the Scene, it is solo — "
-            "one woman only, no other people in frame.\n"
-            "- Always include: pose, body position and orientation, setting/location, "
-            "facial expression, mood/atmosphere, camera angle, lighting\n"
-            "- POSITION DETAIL: describe exactly how the body is positioned — legs, arms, "
-            "hands, hips, angle relative to camera\n"
-            "- MOOD: sultry gaze, playful smirk, flushed cheeks, eyes half-closed, "
-            "biting lower lip, relaxed and confident, tense anticipation\n"
-            "- ENVIRONMENT: full background — furniture, surfaces, wall color/texture, lighting\n"
-            "- SKIN AND BODY: skin texture, muscle definition, curves, visible details\n"
-            "- CLOTHING DETAIL (when clothing is visible): for every garment describe — "
-            "specific color ('dusty rose', 'deep navy'), fabric/texture (silk, ribbed cotton, "
-            "sheer chiffon, distressed denim, lace trim), cut/silhouette (fitted, flowy, "
-            "wrap-style, plunging V-neck, off-shoulder, cropped, high-waisted), "
-            "fit on the body, and visible details (buttons, seams, hem, straps, neckline)\n"
-            "- For SFW: describe full outfit, makeup (lip color, eye look), hair state, accessories\n"
-            "- For NSFW: describe clothing state (removed, pushed aside, bunched at waist); "
-            "describe the nude body explicitly — exposed breasts, bare pussy, bare ass — "
-            "use anatomical terms (pussy, nipples, ass, breasts); do NOT use euphemisms\n"
-            "- FACE INTERACTION RULE: never describe kissing, lips touching another person, "
-            "tongue contact, mouth on genitals, face near crotch, head between legs, "
-            "or any scene where the character's face is in direct contact with or extremely "
-            "close to another person's genitals — these break face-swap compositing. "
-            "For blowjob/oral contexts: show her kneeling/positioned in front of a man "
-            "with her face tilted upward gazing at him, hands on his thighs — "
-            "imply the act through body position and eye contact, NOT through face-genital proximity.\n"
-            "- TWO-PERSON FACE RULE: when a scene includes a man and a woman together, "
-            "the woman's face MUST be the only one clearly visible and facing the camera. "
-            "The man's face must be obscured — turned away from camera, cropped out of frame, "
-            "seen only from behind, buried in shadow, or hidden by angle. "
-            "NEVER show both faces clearly in the same frame — this breaks face-swap compositing. "
-            "Describe the man's presence through his body only: torso, hands, arms, legs — never his face. "
-            "Examples: 'man seen from behind', 'man's face turned away', "
-            "'man cropped at the neck', 'only her face visible', "
-            "'his face out of frame', 'shot from behind him looking over his shoulder at her'.\n"
-            "- Photography style: authentic amateur phone-camera photo, natural lighting, realistic\n"
-            "- Do NOT add clothing if the scene says nude/naked/topless/exposed\n"
-            "- Do NOT add nudity if the scene says clothed/wearing\n"
-            "- No preamble, no explanation, no quotes around the prompt\n"
-            + (
-                f"\n{max_reveal['hint']}\n"
-                f"This limit is ABSOLUTE — do not exceed it regardless of what the Scene requests. "
-                f"If the Scene asks for more revealing content than this limit allows, generate "
-                f"the scene at this maximum level instead.\n"
-                if max_reveal and max_reveal.get("hint") else ""
-            )
-            + (
-                f"\nACT COMPOSITION GUIDE — the Scene contains a known sexual act. "
-                f"Use this precise composition for the image:\n{_act_guidance}\n"
-                f"Incorporate this composition as the primary physical arrangement. "
-                f"All other prompt rules still apply.\n"
-                if (_act_guidance := _get_sexual_act_guidance(user_request if not _context_only_mode else "")) else ""
-            )
-        )
-
-        if _context_only_mode:
-            # No explicit scene — generate something inspired by the conversation mood/topic
-            user_content = (
-                "The user just asked for a photo without specifying what they want. "
-                "Generate a scene that naturally fits the mood, topic, or last thing discussed "
-                "in the conversation below. Make it feel like a spontaneous in-character selfie.\n\n"
-                f"Conversation context (last 5 turns):\n{history_text.strip() or '(no history)'}"
-            )
-        else:
-            user_content = f"Scene: {anchor}"
-            if history_text.strip():
-                user_content += f"\n\nConversation context:\n{history_text.strip()}"
-
-        response = requests.post(
-            TEXT_AI_ENDPOINT,
-            json={
-                "model": MODEL_NAME,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.7,
-                "max_tokens": 700,
-                "stream": False,
-            },
-            timeout=20,
-        )
-
-        # Build a lookup: trigger words → age/descriptor phrase to force into the prompt
-        # This is applied AFTER the LLM returns its prompt to guarantee ages survive.
-        _age_injections = []  # list of (set_of_trigger_words, age_phrase, age_num)
+        # ── Build age-enforcement lookup (used after prompt expansion) ──────────
+        _age_injections = []  # list of (trigger_set, age_phrase, age_num)
         for _fname, _fdesc, _faliases in _family_people:
-            # Extract age from the description if present
             _age_match = re.search(r'\bage\s+(\d+)', _fdesc)
             if _age_match:
                 _age_num = int(_age_match.group(1))
-                # Build a natural age phrase: child vs adult
                 if _age_num < 18:
-                    _age_phrase = f"{_age_num}-year-old girl" if "girl" not in _fdesc.lower() else f"{_age_num}-year-old child"
+                    _age_phrase = f"{_age_num}-year-old girl"
                 else:
                     _age_phrase = f"{_age_num}-year-old man" if "man" in _fdesc.lower() else f"{_age_num}-year-old adult"
                 _age_injections.append((set(_faliases), _age_phrase, _age_num))
@@ -8535,69 +8387,142 @@ def build_image_prompt_from_context(chat_id: int, user_request: str, max_reveal:
                 return flux_prompt
             phrases = [ph.strip() for ph in flux_prompt.split(',')]
             for _triggers, _age_phrase, _age_num in _age_injections:
-                # Skip if the age number already appears in the prompt
                 if str(_age_num) in flux_prompt:
                     continue
-                # Find the first phrase that contains any trigger word
-                insert_after = -1
-                for i, ph in enumerate(phrases):
-                    if any(t in ph.lower() for t in _triggers):
-                        insert_after = i
-                        break
+                insert_after = next(
+                    (i for i, ph in enumerate(phrases) if any(t in ph.lower() for t in _triggers)),
+                    -1
+                )
                 if insert_after >= 0:
                     phrases.insert(insert_after + 1, _age_phrase)
-                    main_logger.info(f"[IMG_PROMPT] Enforced age in prompt: '{_age_phrase}' after phrase {insert_after}")
+                    main_logger.info(f"[IMG_PROMPT] Enforced age: '{_age_phrase}' after phrase {insert_after}")
                 else:
-                    # Trigger word not found in prompt — prepend so age is always present
                     phrases.insert(0, _age_phrase)
-                    main_logger.info(f"[IMG_PROMPT] Prepended age to prompt: '{_age_phrase}'")
+                    main_logger.info(f"[IMG_PROMPT] Prepended age: '{_age_phrase}'")
             return ', '.join(phrases)
 
-        if response.status_code == 200:
-            data = response.json()
-            raw = data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
-            lines = raw.splitlines()
-            if lines:
-                # Defensive: strip any "Line 1:" / "Line 2+:" labels the LLM might add
-                first = lines[0].strip()
-                import re as _re2
-                first = _re2.sub(r'^line\s*\d+[+:]?\s*', '', first, flags=_re2.IGNORECASE).strip().upper()
-                if first in ("NSFW", "SFW"):
-                    is_nsfw = (first == "NSFW")
-                    # Strip "Line 2+:" label from the start of the prompt body if present
-                    # Also truncate if the LLM output two rating sections (e.g. NSFW\n...\nSFW\n...)
-                    prompt_lines = []
-                    for _pl in lines[1:]:
-                        if _pl.strip().upper() in ("NSFW", "SFW"):
-                            break  # stop at any second rating line
-                        prompt_lines.append(_pl)
-                    remaining = "\n".join(prompt_lines).strip().strip('"').strip("'")
-                    remaining = _re2.sub(r'^line\s*\d+[+:]?\s*', '', remaining, flags=_re2.IGNORECASE).strip()
-                    remaining = _enforce_family_ages(remaining)
-                    if _has_minor:
-                        is_nsfw = False  # Hard override — minor in scene
-                    if remaining and len(remaining) > 20:
-                        _nsfw_tag = " nsfw=True |" if is_nsfw else ""
-                        main_logger.info(f"[COMFYUI] LLM{_nsfw_tag} prompt: {remaining}")
-                        return remaining, is_nsfw
-                else:
-                    # LLM didn't follow format — scan for NSFW/SFW anywhere in first line
-                    first_raw = lines[0].strip().upper()
-                    if "NSFW" in first_raw:
-                        is_nsfw = True
-                    elif "SFW" in first_raw:
-                        is_nsfw = False
-                    else:
-                        is_nsfw = _is_nsfw_context(raw) or _is_nsfw_context(user_request)
-                    prompt_text = "\n".join(lines[1:]).strip().strip('"').strip("'") or raw
-                    prompt_text = _enforce_family_ages(prompt_text)
-                    if _has_minor:
-                        is_nsfw = False  # Hard override — minor in scene
-                    if prompt_text and len(prompt_text) > 20:
-                        _nsfw_tag2 = " nsfw=True" if is_nsfw else ""
-                        main_logger.warning(f"[COMFYUI] LLM format deviation — inferred{_nsfw_tag2}")
-                        main_logger.info(f"[COMFYUI] prompt: {prompt_text}")
-                        return prompt_text, is_nsfw
+        # ── CALL 1: dolphin-llama3 — classify SFW/NSFW + write plain scene description ──
+        # Dolphin handles all the context/rules thinking. Output is a natural-language
+        # scene description (plain prose, not FLUX format) which Call 2 will expand.
+        _act_guidance = _get_sexual_act_guidance(user_request if not _context_only_mode else "")
+
+        scene_system = (
+            "You are a scene director for a photorealistic image generator. "
+            "Your job is to read a photo request and write a concise scene description "
+            "that captures exactly what should appear in the image.\n\n"
+            f"CHARACTER in every scene:\n{char_block}\n\n"
+            + (_family_img_block if _family_img_block else "")
+            + (_family_people_block if _family_people_block else "")
+            + (f"CHARACTER LIFESTYLE:\n{setting_block}\n\n" if setting_block else "")
+            + (
+                "MINOR PRESENT — a person under 18 is in this scene.\n"
+                "Classification MUST be SFW. Scene is family/wholesome only.\n"
+                "Adult must be fully clothed in a parental role. No nudity, no suggestive content.\n\n"
+                if _has_minor else ""
+            )
+            + "CLASSIFICATION RULES:\n"
+            "- NSFW = nudity (exposed genitals, bare breasts/nipples, fully/partially nude body)\n"
+            "- SFW = clothed, swimwear, lingerie, suggestive but no nudity\n"
+            "- 'naked'/'nude'/'topless'/'bare' → NSFW. 'bikini'/'lingerie' → SFW.\n"
+            "- When in doubt: SFW\n\n"
+            "SCENE RULES:\n"
+            f"- Setting: if a customer/client/patient is mentioned → {work_setting}. "
+            "Solo scene → personal space (bedroom, bathroom, home). "
+            "Explicit location in request → use it exactly.\n"
+            "- If a man is present: describe him by body only (torso, hands, arms) — "
+            "his face is always turned away, cropped, or out of frame.\n"
+            "- No sexual acts in the description — nudity only. "
+            "No face-to-genitals proximity.\n"
+            + (f"- Reveal limit: {max_reveal['hint']}\n" if max_reveal and max_reveal.get("hint") else "")
+            + (_act_guidance and f"- Act composition: {_act_guidance}\n" or "")
+            + "\nOUTPUT — exactly two parts, nothing else:\n"
+            "Line 1: SFW or NSFW (one word)\n"
+            "Line 2: Plain-English scene description (3-5 sentences). "
+            "Include: who is in frame, what they look like, what they're doing, "
+            "where they are, lighting, mood. No FLUX formatting — just describe the scene.\n"
+        )
+
+        if _context_only_mode:
+            scene_user = (
+                "The user asked for a photo without specifying the scene. "
+                "Pick a spontaneous, in-character moment that fits the conversation mood.\n\n"
+                f"Conversation:\n{history_text.strip() or '(no history)'}"
+            )
+        else:
+            scene_user = f"Photo request: {anchor}"
+            if history_text.strip():
+                scene_user += f"\n\nConversation context:\n{history_text.strip()}"
+
+        r1 = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": scene_system},
+                    {"role": "user", "content": scene_user},
+                ],
+                "temperature": 0.5,
+                "max_tokens": 300,
+                "stream": False,
+            },
+            timeout=20,
+        )
+
+        if r1.status_code != 200:
+            raise RuntimeError(f"Scene planner call failed: HTTP {r1.status_code}")
+
+        r1_raw = r1.json()["choices"][0]["message"]["content"].strip()
+        r1_lines = r1_raw.splitlines()
+
+        # Parse SFW/NSFW from first line
+        _first = re.sub(r'^line\s*\d+[+:]?\s*', '', r1_lines[0].strip(), flags=re.IGNORECASE).strip().upper()
+        if "NSFW" in _first:
+            is_nsfw = True
+        elif "SFW" in _first:
+            is_nsfw = False
+        else:
+            is_nsfw = _is_nsfw_context(r1_raw) or _is_nsfw_context(user_request)
+
+        if _has_minor:
+            is_nsfw = False  # Hard override
+
+        scene_description = "\n".join(r1_lines[1:]).strip() or r1_raw
+        main_logger.info(f"[IMG_PROMPT] Scene ({'NSFW' if is_nsfw else 'SFW'}): {scene_description[:120]}")
+
+        # ── CALL 2: brxce/stable-diffusion-prompt-generator — expand to FLUX phrases ──
+        # Feed the plain scene description to the SD-specialized model.
+        # It's instruction-tuned to produce comma-separated diffusion-style phrases.
+        r2 = requests.post(
+            TEXT_AI_ENDPOINT,
+            json={
+                "model": PROMPT_GEN_MODEL,
+                "messages": [
+                    {"role": "user", "content": scene_description},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 500,
+                "stream": False,
+            },
+            timeout=20,
+        )
+
+        if r2.status_code != 200:
+            raise RuntimeError(f"Prompt generator call failed: HTTP {r2.status_code}")
+
+        flux_prompt = r2.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+
+        # Strip any SFW/NSFW tag the prompt generator might echo
+        flux_prompt = re.sub(r'^\s*(nsfw|sfw)\s*[,\n]?', '', flux_prompt, flags=re.IGNORECASE).strip()
+
+        flux_prompt = _enforce_family_ages(flux_prompt)
+
+        if _has_minor:
+            is_nsfw = False  # Double-check after expansion
+
+        if flux_prompt and len(flux_prompt) > 20:
+            _nsfw_tag = " nsfw=True |" if is_nsfw else ""
+            main_logger.info(f"[COMFYUI] PromptGen{_nsfw_tag} prompt: {flux_prompt}")
+            return flux_prompt, is_nsfw
     except Exception as e:
         main_logger.warning(f"[COMFYUI] LLM prompt generation failed, using raw request: {e}")
 
