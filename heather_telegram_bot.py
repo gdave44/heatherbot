@@ -2379,6 +2379,46 @@ STORY_LLM_KINK_COMBOS = [
     "riding a passenger reverse cowgirl in the backseat",
 ]
 
+def _format_story_paragraphs(text: str, sentences_per_para: int = 4) -> str:
+    """Ensure a story has blank lines between paragraphs.
+
+    If the text already has double newlines, normalise them and return.
+    If it's a wall of text (no double newlines), split into paragraphs at
+    sentence boundaries every `sentences_per_para` sentences.
+    """
+    text = text.strip()
+
+    # If the model put in paragraph breaks, just normalise spacing
+    if '\n\n' in text:
+        # Collapse 3+ blank lines to 2, strip trailing spaces per line
+        import re as _re_para
+        text = _re_para.sub(r'\n{3,}', '\n\n', text)
+        return text
+
+    # Wall of text — split at sentence-ending punctuation boundaries
+    # Split on '. ', '? ', '! ', '.\n', etc.
+    import re as _re_para
+    # Find sentence-end positions
+    sentence_ends = [m.end() for m in _re_para.finditer(r'(?<=[.!?])\s+', text)]
+
+    if not sentence_ends:
+        return text  # Can't split — return as-is
+
+    paragraphs = []
+    prev = 0
+    for i, end in enumerate(sentence_ends):
+        # Insert a paragraph break every N sentences (1-indexed)
+        if (i + 1) % sentences_per_para == 0:
+            paragraphs.append(text[prev:end].strip())
+            prev = end
+    # Append the tail
+    tail = text[prev:].strip()
+    if tail:
+        paragraphs.append(tail)
+
+    return '\n\n'.join(p for p in paragraphs if p)
+
+
 def get_story_mode_prompt() -> str:
     """Get the system prompt injection for LLM-generated stories."""
     kinks = random.choice(STORY_LLM_KINK_COMBOS)
@@ -2390,14 +2430,17 @@ def get_story_mode_prompt() -> str:
         f"- NO bullet points, NO fragmented notes, NO telegram-style shorthand.\n"
         f"- Write the way you'd tell a close friend a juicy secret — casual, vivid, unfiltered.\n"
         f"- 250+ words minimum. 3-5 paragraphs: setup → tension → explicit act → aftermath.\n"
+        f"- Separate each paragraph with a BLANK LINE (press Enter twice between paragraphs).\n"
         f"- Include: how you met, what drew you to them, the moment it tipped, graphic physical "
         f"detail of the act itself, and how you felt after.\n"
         f"- Use dirty talk where natural. Name body parts explicitly. Show don't tell.\n"
         f"- End with a question inviting the user to share their own experience.\n\n"
-        f"EXAMPLE OPENING STYLE (match this voice):\n"
+        f"EXAMPLE OPENING STYLE (match this voice and paragraph spacing):\n"
         f"\"Okay so this was maybe two years into driving Uber, late on a Friday — like 1am. "
         f"I'd already done a dozen runs and I was about to log off when I got a ping from this "
-        f"bar downtown. Guy comes out, late thirties, button-down half untucked, dark hair. Cute.\"\n\n"
+        f"bar downtown. Guy comes out, late thirties, button-down half untucked, dark hair. Cute.\n\n"
+        f"We're about ten minutes in and he's just watching me in the rearview. Not in a creepy "
+        f"way — in a way that made me squeeze my thighs together.\"\n\n"
         f"Write the complete story now — no preamble, start directly with the story.]"
     )
 
@@ -9879,6 +9922,7 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: get_text_ai_response(story_target, "[tell me a story]", request_id="hubaloo_story")
                 )
                 if response:
+                    response = _format_story_paragraphs(response)
                     await context.bot.send_message(story_target, response)
                     store_message(story_target, "Heather", response)
                     asyncio.get_running_loop().run_in_executor(None, lambda: _save_llm_story(response))
@@ -11314,6 +11358,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if is_duplicate_response(chat_id, response):
             response = get_fallback_response(chat_id)
             main_logger.info(f"[{request_id}] Still duplicate after retry, using fallback for {chat_id}")
+
+    # Story formatting — ensure paragraph spacing for LLM-generated stories
+    if _was_story_mode:
+        response = _format_story_paragraphs(response)
 
     # HUMANIZING: Adjust response to match user's message energy
     response = adjust_response_energy(response, user_message)
