@@ -6563,46 +6563,47 @@ def get_text_ai_response(chat_id: int, user_message: str, retry_count: int = 0, 
             # Frank throttle: max 1 mention per 5 messages
             ai_response = throttle_frank(ai_response, chat_id)
 
-            # Meeting plan scrubber — strip specific days/times/locations the LLM hallucinates
-            _meeting_time_pattern = re.compile(
-                r'(?:(?:around|at|say)\s+)?'
-                r'(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:night|morning|afternoon|evening)?\s*(?:around|at)?\s*)?'
-                r'\d{1,2}\s*(?::\d{2})?\s*(?:am|pm|o\'?clock)'
-                r'(?:\s+(?:sharp|exactly|on the dot|on the nose))?',
-                re.IGNORECASE
-            )
-            _meeting_day_pattern = re.compile(
-                r'(?:how about|let\'?s (?:do|say|aim for|meet)|(?:we )?meet)\s+'
-                r'(?:this\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|next week)',
-                re.IGNORECASE
-            )
-            # Location-based meetup suggestions — catches "meet at [place]", "grab coffee at [place]"
-            _meeting_location_pattern = re.compile(
-                r'(?:meet|hang\s*out|get\s+together|grab\s+(?:coffee|drinks?|dinner|lunch|food|a\s+bite))'
-                r'\s+(?:at|by|near|on|in)\s+'
-                r'(?:the\s+)?[A-Z][a-zA-Z\'\s]{2,25}(?:waterfront|beach|park|bar|cafe|restaurant|grill|plaza|mall|market|pier|boardwalk|pub|bistro|lounge)?',
-                re.IGNORECASE
-            )
-            # Address-like patterns: "123 Main St" or "come to my place on Oak Avenue"
-            _meeting_address_pattern = re.compile(
-                r'\d{2,5}\s+[A-Z][a-z]+\s+(?:st(?:reet)?|ave(?:nue)?|rd|road|dr(?:ive)?|blvd|ln|lane|way|ct|place|circle)\b',
-                re.IGNORECASE
-            )
-            _any_meeting_match = (
-                _meeting_time_pattern.search(ai_response)
-                or _meeting_day_pattern.search(ai_response)
-                or _meeting_location_pattern.search(ai_response)
-                or _meeting_address_pattern.search(ai_response)
-            )
-            if _any_meeting_match:
-                main_logger.info(f"Meeting plan scrubbed from response: {ai_response[:100]}")
-                # Strip the specific plan and add vague deflection
-                ai_response = _meeting_time_pattern.sub('sometime soon', ai_response)
-                ai_response = _meeting_day_pattern.sub("let's figure out a time", ai_response)
-                ai_response = _meeting_location_pattern.sub("meet up somewhere fun", ai_response)
-                ai_response = _meeting_address_pattern.sub("somewhere nearby", ai_response)
-                # Clean up artifacts: double spaces, orphan punctuation
-                ai_response = re.sub(r'  +', ' ', ai_response).strip()
+            # Meeting plan scrubber — skip for story mode (stories naturally contain times/places)
+            if not _in_story_mode:
+                _meeting_time_pattern = re.compile(
+                    r'(?:(?:around|at|say)\s+)?'
+                    r'(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*(?:night|morning|afternoon|evening)?\s*(?:around|at)?\s*)?'
+                    r'\d{1,2}\s*(?::\d{2})?\s*(?:am|pm|o\'?clock)'
+                    r'(?:\s+(?:sharp|exactly|on the dot|on the nose))?',
+                    re.IGNORECASE
+                )
+                _meeting_day_pattern = re.compile(
+                    r'(?:how about|let\'?s (?:do|say|aim for|meet)|(?:we )?meet)\s+'
+                    r'(?:this\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|next week)',
+                    re.IGNORECASE
+                )
+                # Location-based meetup suggestions — catches "meet at [place]", "grab coffee at [place]"
+                _meeting_location_pattern = re.compile(
+                    r'(?:meet|hang\s*out|get\s+together|grab\s+(?:coffee|drinks?|dinner|lunch|food|a\s+bite))'
+                    r'\s+(?:at|by|near|on|in)\s+'
+                    r'(?:the\s+)?[A-Z][a-zA-Z\'\s]{2,25}(?:waterfront|beach|park|bar|cafe|restaurant|grill|plaza|mall|market|pier|boardwalk|pub|bistro|lounge)?',
+                    re.IGNORECASE
+                )
+                # Address-like patterns: "123 Main St" or "come to my place on Oak Avenue"
+                _meeting_address_pattern = re.compile(
+                    r'\d{2,5}\s+[A-Z][a-z]+\s+(?:st(?:reet)?|ave(?:nue)?|rd|road|dr(?:ive)?|blvd|ln|lane|way|ct|place|circle)\b',
+                    re.IGNORECASE
+                )
+                _any_meeting_match = (
+                    _meeting_time_pattern.search(ai_response)
+                    or _meeting_day_pattern.search(ai_response)
+                    or _meeting_location_pattern.search(ai_response)
+                    or _meeting_address_pattern.search(ai_response)
+                )
+                if _any_meeting_match:
+                    main_logger.info(f"Meeting plan scrubbed from response: {ai_response[:100]}")
+                    # Strip the specific plan and add vague deflection
+                    ai_response = _meeting_time_pattern.sub('sometime soon', ai_response)
+                    ai_response = _meeting_day_pattern.sub("let's figure out a time", ai_response)
+                    ai_response = _meeting_location_pattern.sub("meet up somewhere fun", ai_response)
+                    ai_response = _meeting_address_pattern.sub("somewhere nearby", ai_response)
+                    # Clean up artifacts: double spaces, orphan punctuation
+                    ai_response = re.sub(r'  +', ' ', ai_response).strip()
 
             # Meetup commitment-language scrubber — catches "I'll be there", "on my way", etc.
             _MEETUP_COMMITMENT_DEFLECTIONS = [
@@ -9868,9 +9869,7 @@ async def handle_hubaloo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if response:
                     await context.bot.send_message(story_target, response)
                     store_message(story_target, "Heather", response)
-                    asyncio.create_task(asyncio.get_event_loop().run_in_executor(
-                        None, lambda: _save_llm_story(response)
-                    ))
+                    asyncio.get_running_loop().run_in_executor(None, lambda: _save_llm_story(response))
                     main_logger.info(f"[HUBALOO] LLM story sent and queued for save ({len(response.split())} words)")
                 else:
                     await context.bot.send_message(chat_id, "⚠️ LLM returned empty response.")
@@ -11412,9 +11411,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # If this response was an LLM-generated story, save it to the story bank
         if _was_story_mode:
-            asyncio.create_task(asyncio.get_event_loop().run_in_executor(
-                None, lambda: _save_llm_story(response)
-            ))
+            asyncio.get_running_loop().run_in_executor(None, lambda: _save_llm_story(response))
 
         # Track content promises — if the response teases sending media, mark for follow-through
         response_lower = response.lower()
